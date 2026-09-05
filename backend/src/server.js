@@ -15,8 +15,29 @@ const wellnessRoutes = require('./routes/wellnessRoutes');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// CORS — allow Vercel deployments and localhost
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, Postman)
+    if (!origin) return callback(null, true);
+    // Allow all Vercel subdomains and localhost
+    if (
+      origin.includes('vercel.app') ||
+      origin.includes('localhost') ||
+      origin.includes('127.0.0.1') ||
+      (process.env.ALLOWED_ORIGIN && origin === process.env.ALLOWED_ORIGIN)
+    ) {
+      return callback(null, true);
+    }
+    callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
+
 // Middleware
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
