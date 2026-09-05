@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import Link from 'next/link';
+import AuthCard from '@/components/AuthCard';
 
 export default function RecommendationsPage() {
   const [dietPlan, setDietPlan] = useState<any>(null);
@@ -129,21 +130,10 @@ export default function RecommendationsPage() {
 
   if (!isLoggedIn) {
     return (
-      <div className="max-w-xl mx-auto text-center py-16 px-4 space-y-4">
-        <div className="text-5xl">🔐</div>
-        <h2 className="text-2xl font-bold">Please Log In</h2>
-        <p className="text-gray-500 text-sm">
-          Log in to view and generate your personalized Indian diet and exercise recommendations tailored to your health risk profile.
-        </p>
-        <div className="pt-2">
-          <Link
-            href="/login"
-            className="px-6 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg font-semibold transition"
-          >
-            Go to Login
-          </Link>
-        </div>
-      </div>
+      <AuthCard
+        title="Please Log In to View Recommendations"
+        description="Log in to view and generate your personalized Indian diet and exercise recommendations tailored to your health risk profile."
+      />
     );
   }
 

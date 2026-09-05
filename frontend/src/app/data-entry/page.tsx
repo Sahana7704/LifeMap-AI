@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { api } from '@/lib/api';
 import { useRouter } from 'next/navigation';
+import AuthCard from '@/components/AuthCard';
 
 const defaultForm = {
   age: '', gender: 'Male', height_cm: '', weight_kg: '',
@@ -17,9 +18,19 @@ export default function DataEntryPage() {
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [uploadLoading, setUploadLoading] = useState(false);
+  const [isLoggedIn, setIsLoggedIn] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const router = useRouter();
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setIsLoggedIn(false);
+      }
+    }
+  }, []);
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 3500); };
 
@@ -40,27 +51,10 @@ export default function DataEntryPage() {
   const handleUpload = async () => {
     if (!file) return;
     setUploadLoading(true);
+    setError(null);
     try {
-      const formData = new FormData();
-      formData.append('report', file);
-      const baseUrl = (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))
-        ? 'http://localhost:5000/api'
-        : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api');
-      const res = await fetch(`${baseUrl}/reports/upload`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` },
-        body: formData,
-      });
-      const responseText = await res.text();
-      let data: any = {};
-      try {
-        data = JSON.parse(responseText);
-      } catch (parseErr) {
-        if (!res.ok) {
-          throw new Error(`Server returned error ${res.status} (${res.statusText || 'Timeout'}). Please try again.`);
-        }
-      }
-      if (!res.ok) throw new Error(data.error || data.details || 'Upload failed');
+      const res = await api.uploadReport(file);
+      const data = res.data;
       if (data.extracted_metrics) {
         const m = data.extracted_metrics;
         setForm((prev: any) => ({
@@ -78,7 +72,11 @@ export default function DataEntryPage() {
         showToast('✅ Lab report parsed! Fields auto-filled from OCR.');
       }
     } catch (e: any) {
-      setError('Report upload failed: ' + e.message);
+      if (e.response?.status === 401) {
+        setIsLoggedIn(false);
+      } else {
+        setError('Report upload failed: ' + (e.response?.data?.error || e.message));
+      }
     } finally {
       setUploadLoading(false);
     }
@@ -95,11 +93,24 @@ export default function DataEntryPage() {
       setResult(res.data);
       showToast('✅ Risk prediction complete!');
     } catch (e: any) {
-      setError(e.response?.data?.error || e.message || 'Prediction failed');
+      if (e.response?.status === 401) {
+        setIsLoggedIn(false);
+      } else {
+        setError(e.response?.data?.error || e.message || 'Prediction failed');
+      }
     } finally {
       setLoading(false);
     }
   };
+
+  if (!isLoggedIn) {
+    return (
+      <AuthCard
+        title="Please Log In to Enter Health Data"
+        description="Log in to record your vitals, compute clinical risk assessments, and generate your personal health map."
+      />
+    );
+  }
 
   return (
     <div className="max-w-3xl mx-auto space-y-6 p-4">

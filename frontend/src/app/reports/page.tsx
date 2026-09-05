@@ -3,10 +3,12 @@
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import Link from 'next/link';
+import AuthCard from '@/components/AuthCard';
 
 export default function ReportsPage() {
   const [reports, setReports] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isLoggedIn, setIsLoggedIn] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<any>(null);
   const [uploading, setUploading] = useState(false);
@@ -58,6 +60,15 @@ export default function ReportsPage() {
   };
 
   const fetchReports = async (targetReportId?: string) => {
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setIsLoggedIn(false);
+        setLoading(false);
+        return;
+      }
+    }
+
     try {
       const res = await api.getReports();
       if (Array.isArray(res.data) && res.data.length > 0) {
@@ -69,8 +80,10 @@ export default function ReportsPage() {
           setSelected(res.data[0]);
         }
       }
-    } catch {
-      // Clean fallback if no reports stored
+    } catch (e: any) {
+      if (e.response?.status === 401) {
+        setIsLoggedIn(false);
+      }
     } finally {
       setLoading(false);
     }
@@ -213,6 +226,15 @@ export default function ReportsPage() {
     if (k.includes('weight')) return 'kg';
     return '';
   };
+
+  if (!isLoggedIn) {
+    return (
+      <AuthCard
+        title="Please Log In to View Reports"
+        description="Log in to upload diagnostic lab reports (PDF/Images) and access automated biomarker extraction."
+      />
+    );
+  }
 
   return (
     <div className="max-w-5xl mx-auto p-4 space-y-6">

@@ -5,11 +5,13 @@ import { api } from '@/lib/api';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
+import AuthCard from '@/components/AuthCard';
 
 export default function WellnessPage() {
   const [logs, setLogs] = useState<any[]>([]);
   const [trends, setTrends] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isLoggedIn, setIsLoggedIn] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
@@ -18,15 +20,28 @@ export default function WellnessPage() {
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 3500); };
 
   const fetchData = async () => {
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setIsLoggedIn(false);
+        setLoading(false);
+        return;
+      }
+    }
+
     try {
       const [logsRes, trendsRes] = await Promise.all([api.getLogs(), api.getTrends()]);
-      setLogs(logsRes.data);
-      setTrends(trendsRes.data.map((t: any) => ({
+      setLogs(logsRes.data || []);
+      setTrends((trendsRes.data || []).map((t: any) => ({
         ...t,
         date: new Date(t.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
       })));
     } catch (e: any) {
-      setError(e.message);
+      if (e.response?.status === 401) {
+        setIsLoggedIn(false);
+      } else {
+        setError(e.response?.data?.error || e.message || 'Failed to fetch wellness data');
+      }
     } finally {
       setLoading(false);
     }
@@ -56,9 +71,22 @@ export default function WellnessPage() {
       setForm({ glucose: '', systolic_bp: '', diastolic_bp: '', bmi: '', notes: '' });
       await fetchData();
     } catch (e: any) {
-      setError(e.response?.data?.error || e.message || 'Failed to save log');
+      if (e.response?.status === 401) {
+        setIsLoggedIn(false);
+      } else {
+        setError(e.response?.data?.error || e.message || 'Failed to save log');
+      }
     }
   };
+
+  if (!isLoggedIn) {
+    return (
+      <AuthCard
+        title="Please Log In to Track Wellness"
+        description="Log in to record your daily blood glucose, blood pressure, BMI, and view historical health trend charts."
+      />
+    );
+  }
 
   return (
     <div className="max-w-4xl mx-auto p-4 space-y-6">

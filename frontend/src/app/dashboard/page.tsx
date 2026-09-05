@@ -3,9 +3,11 @@
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import Link from 'next/link';
+import AuthCard from '@/components/AuthCard';
 
 export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
+  const [isLoggedIn, setIsLoggedIn] = useState(true);
   const [data, setData] = useState<any>(null);
   const [latestReport, setLatestReport] = useState<any>(null);
   const [userName, setUserName] = useState<string>('New User');
@@ -18,8 +20,13 @@ export default function DashboardPage() {
   };
 
   useEffect(() => {
-    // Get logged-in user name
     if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setIsLoggedIn(false);
+        setLoading(false);
+        return;
+      }
       const stored = localStorage.getItem('user');
       if (stored) {
         try {
@@ -173,6 +180,15 @@ export default function DashboardPage() {
       return self.findIndex((o: any) => `${String(o.feature || o.base_feature || '').toLowerCase()}_${String(o.label || '').toLowerCase()}` === uniqueKey) === idx;
     })
     .sort((a: any, b: any) => Number(b.impact_pct || 0) - Number(a.impact_pct || 0));
+
+  if (!isLoggedIn) {
+    return (
+      <AuthCard
+        title="Please Log In to View Dashboard"
+        description="Log in to view your personalized health dashboard, track your risk indices, and view clinical insights."
+      />
+    );
+  }
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 pb-12">

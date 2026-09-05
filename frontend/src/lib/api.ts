@@ -8,6 +8,22 @@ function getAuthHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+// Global response interceptor to handle session expiry gracefully
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401 && typeof window !== 'undefined') {
+      const hadToken = Boolean(localStorage.getItem('token'));
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      if (hadToken) {
+        window.dispatchEvent(new Event('auth-change'));
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 export const api = {
   // Auth
   register: (data: any) => axios.post(`${API_URL}/auth/register`, data),

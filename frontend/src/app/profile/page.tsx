@@ -3,10 +3,12 @@
 import { useEffect, useState } from 'react';
 import { api } from '@/lib/api';
 import Link from 'next/link';
+import AuthCard from '@/components/AuthCard';
 
 export default function ProfilePage() {
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [isLoggedIn, setIsLoggedIn] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [formData, setFormData] = useState<any>({});
@@ -17,25 +19,39 @@ export default function ProfilePage() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  useEffect(() => {
-    async function fetchProfile() {
-      try {
-        const res = await api.getProfile();
-        setProfile(res.data);
-        setFormData({
-          name: res.data.name || '',
-          age: res.data.age != null ? res.data.age : '',
-          gender: res.data.gender || 'Male',
-          height: res.data.height != null ? res.data.height : '',
-          weight: res.data.weight != null ? res.data.weight : '',
-          diet_preference: res.data.diet_preference || 'veg',
-        });
-      } catch (e: any) {
-        setError(e.message || 'Failed to load profile');
-      } finally {
+  const fetchProfile = async () => {
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setIsLoggedIn(false);
         setLoading(false);
+        return;
       }
     }
+
+    try {
+      const res = await api.getProfile();
+      setProfile(res.data);
+      setFormData({
+        name: res.data.name || '',
+        age: res.data.age != null ? res.data.age : '',
+        gender: res.data.gender || 'Male',
+        height: res.data.height != null ? res.data.height : '',
+        weight: res.data.weight != null ? res.data.weight : '',
+        diet_preference: res.data.diet_preference || 'veg',
+      });
+    } catch (e: any) {
+      if (e.response?.status === 401) {
+        setIsLoggedIn(false);
+      } else {
+        setError(e.response?.data?.error || e.message || 'Failed to load profile');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchProfile();
   }, []);
 
@@ -51,12 +67,39 @@ export default function ProfilePage() {
       setEditMode(false);
       showToast('✅ Profile updated successfully!');
     } catch (e: any) {
-      setError(e.message || 'Failed to update profile');
+      if (e.response?.status === 401) {
+        setIsLoggedIn(false);
+      } else {
+        setError(e.response?.data?.error || e.message || 'Failed to update profile');
+      }
     }
   };
 
-  if (loading) return <div className="flex items-center justify-center h-64"><span className="text-gray-500">Loading profile…</span></div>;
-  if (error) return <div className="text-red-500 p-4">{error}</div>;
+  if (!isLoggedIn) {
+    return (
+      <AuthCard
+        title="Please Log In to View Your Profile"
+        description="Log in to view and update your personal health profile, body measurements, and dietary preferences."
+      />
+    );
+  }
+
+  if (loading) return <div className="flex items-center justify-center h-64"><span className="text-gray-500 animate-pulse">Loading profile…</span></div>;
+
+  if (error) {
+    return (
+      <div className="max-w-md mx-auto my-12 p-6 rounded-2xl bg-white dark:bg-gray-800 border border-red-200 dark:border-red-900/60 shadow-sm text-center space-y-4">
+        <div className="text-3xl">⚠️</div>
+        <p className="text-red-600 dark:text-red-400 text-sm font-medium">{error}</p>
+        <button
+          onClick={() => { setError(null); setLoading(true); fetchProfile(); }}
+          className="px-4 py-2 bg-teal-600 text-white text-xs font-semibold rounded-xl hover:bg-teal-700 transition"
+        >
+          Try Again
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-2xl mx-auto space-y-6 p-4">
