@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Next.js build output & caches
+frontend/.next/
+frontend/out/
+
+# Environment files
+.env
+.env*.local
+backend/.env
+frontend/.env.local
+
+# Python artifacts
+__pycache__/
+*/__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+
+# Uploads & temporary artifacts
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/src/db/local_storage.json
+scratch/
+
+# OS / IDE artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

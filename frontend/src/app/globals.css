@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+/* ── Tailwind v4: enable class-based dark mode ── */
+@variant dark (&:where(.dark, .dark *));
+
+/* ── Design tokens from Stitch design system ── */
+:root {
+  --color-primary: #00685f;
+  --color-primary-dark: #004d45;
+  --color-secondary: #006398;
+  --color-background: #faf8ff;
+  --color-foreground: #171717;
+}
+
+@theme inline {
+  --color-primary: var(--color-primary);
+  --color-primary-dark: var(--color-primary-dark);
+  --color-secondary: var(--color-secondary);
+  --color-background: var(--color-background);
+  --color-foreground: var(--color-foreground);
+}
+
+/* Light mode body */
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: Inter, system-ui, Arial, sans-serif;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* Dark mode body — applied when <html> has class="dark" */
+html.dark body {
+  background-color: #0d0d14;
+  color: #ededed;
+}
+
+/* Glassmorphism utility */
+.glass {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* Smooth transitions for theme switching */
+*,
+*::before,
+*::after {
+  transition-property: background-color, border-color, color;
+  transition-duration: 0.2s;
+  transition-timing-function: ease;
+}
