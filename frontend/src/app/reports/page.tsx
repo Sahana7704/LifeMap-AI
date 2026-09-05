@@ -143,7 +143,8 @@ export default function ReportsPage() {
         if (data.pipeline_status === 'HARD_STOP_PRE_GENERATION') {
           throw new Error(data.error || 'Could not extract diabetes or obesity-relevant values from this report. Please upload a report with glucose/HbA1c results or height & weight / BMI.');
         }
-        throw new Error(data.error || data.details || 'Upload failed');
+        const errMsg = data.details ? `${data.error} (${data.details})` : (data.error || 'Upload failed');
+        throw new Error(errMsg);
       }
 
       // Safely ensure summary is a string
