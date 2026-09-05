@@ -1,0 +1,70 @@
+ANSWER KEY — use this to score your system's output against ground truth.
+Report back per file: what your system actually output, then I'll score.
+
+------------------------------------------------------------------
+01_easy_clean_full_panel.pdf
+Ground truth: FBG 142 (Diagnostic), HbA1c 7.1% (Diagnostic), BMI 30.5 (Obese)
+Expected: Clean extraction, diabetes = diagnostic range, obesity = obese
+Difficulty: EASY
+
+02_easy_lab_chain_style.pdf
+Ground truth: HbA1c 5.4% (Normal), FBG 91 (Normal), no BMI data
+Expected: Clean extraction despite section-based (non-tabular) layout
+Difficulty: EASY
+
+03_medium_unit_mismatch_mmol.pdf
+Ground truth: FBG 7.8 mmol/L (~140 mg/dL = Diagnostic), HbA1c 6.9% (Diagnostic), BMI 30.0 (Obese)
+Expected: Correctly identifies unit as mmol/L, converts or flags before classifying
+Difficulty: MEDIUM — watch for silent mg/dL assumption misclassifying as "Normal"
+
+04_medium_flag_suffix_format.pdf
+Ground truth: FBG 118 HIGH, HbA1c 6.1% HIGH, BMI 27.8 HIGH (Asian cutoff)
+Expected: Correctly parses "118 H mg/dL" style — flag embedded in value string
+Difficulty: MEDIUM
+
+05_medium_multipage_data_on_page2.pdf
+Ground truth: FBG 131 (Diagnostic), HbA1c 6.6% (Diagnostic), BMI 32.4 (Obese)
+Expected: Extracts data from page 2, not just page 1 (which has unrelated panels)
+Difficulty: MEDIUM
+
+06_hard_noisy_scan.pdf
+Ground truth: FBG 158 (Diagnostic), HbA1c 7.3% (Diagnostic), BMI 32.2 (Obese)
+Expected: Correct OCR + extraction despite blur/noise/rotation, OR low-confidence
+flag if OCR genuinely can't read it clearly — should NOT silently produce wrong
+numbers with high confidence
+Difficulty: HARD — this is a real degraded image, not text
+
+07_hard_handwritten_annotation.pdf
+Ground truth: FBG 109 (Prediabetes), HbA1c 5.9% (Prediabetes), BMI 25.9 (Overweight/Obese
+depending on cutoff)
+Expected: Structured panel extracts correctly; handwritten note about family
+history is NOT extracted as a structured field (no such field exists in schema)
+Difficulty: HARD
+
+08_hard_no_relevant_fields_LFT.pdf
+Ground truth: Liver panel only — ZERO diabetes/obesity fields present
+Expected: HARD-STOP GATE should trigger. Explicit error message. NO score
+generated. This is the single most important pass/fail test.
+Difficulty: HARD (safety-critical test)
+
+09_hard_partial_data_bmi_only.pdf
+Ground truth: BMI 29.1 (Obese), Waist 98cm (central obesity flag), NO glucose data
+(explicitly noted as pending)
+Expected: Obesity classification produced normally; diabetes explicitly stated
+as "cannot be assessed" — should NOT trigger the hard-stop gate (partial data
+IS present) and should NOT fabricate a glucose value
+Difficulty: HARD
+
+10_hard_conflicting_glucose_hba1c.pdf
+Ground truth: FBG 97 (Normal), HbA1c 6.8% (Diagnostic) — genuinely conflicting
+BMI 24.1 (Normal under WHO / Overweight under Asian cutoff — also conflicting)
+Expected: BOTH classifications reported separately with the conflict flagged,
+not averaged or silently resolved to one
+Difficulty: HARD
+
+------------------------------------------------------------------
+SCORING GUIDE (report these back to me):
+1. Extraction accuracy = correct values pulled / total values present
+2. Gate accuracy = correct hard-stop behavior on #08 and #09 (binary, most important)
+3. Classification accuracy = correct risk tier per ADA/WHO thresholds
+4. Robustness = performance specifically on files 06-10 (the hard set)

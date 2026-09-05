@@ -1,0 +1,14 @@
+METABOLIC LAB REPORT
+Patient Name: Sahana Sharma
+Age: 38 Years
+Gender: Female
+Date of Collection: 04-Sep-2026
+
+TEST PARAMETERS:
+Fasting Blood Glucose: 118 mg/dL  (Reference: 70 - 99 mg/dL)  *HIGH*
+HbA1c: 6.1 %  (Reference: < 5.7 %)  *HIGH*
+
+PHYSICAL ANTHROPOMETRY:
+Height: 162 cm
+Weight: 68 kg
+Waist Circumference: 84 cm

@@ -1,0 +1,141 @@
+<USER_REQUEST>
+# LifeMap AI — Consolidated Bug Report (all tests to date)
+
+## STATUS: FIXED (confirmed by retest — no action needed, verify doesn't regress)
+1. Hard-stop gate for zero-relevant-field reports — CONFIRMED WORKING.
+   Test: liver panel (LFT) upload correctly returned explicit error
+   ("Could not extract diabetes or obesity-relevant values...") instead
+   of generating a score. Keep this behavior; don't regress it.
+
+2. Diabetes/obesity core classification logic — CONFIRMED WORKING.
+   FBG, HbA1c-referenced, and BMI values extract correctly and classify
+   correctly per ADA/WHO-Asian thresholds on multiple tests. Waist
+   circumference correctly applies sex-specific cutoffs (90cm male /
+   80cm female).
+
+---
+
+## STILL OPEN — HIGH PRIORITY
+
+### Bug A: Nutrition module ignores extracted demographics, uses a
+static/default profile instead
+Evidence: Two separate uploads (different patients — one Female/160cm,
+one Male/175cm) both produced nutrition-module BMR calculations using
+"158cm, Female" — a fixed value that doesn't match either source
+report. Weight in both cases was back-calculated from the correctly-
+extracted BMI using this wrong fixed height (76.1kg and 72.6kg
+respectively both reverse-engineer exactly to BMI÷158cm²), meaning
+Age and BMI ARE read per-report but Sex, Height, and Weight are NOT.
+Fix required: Nutrition/BMR module must read Sex, Height, and Weight
+directly from the same Step 2 verified extraction JSON used by the
+diabetes/obesity module — not from a static account/profile default
+or independent estimate.
+
+### Bug B: HbA1c not treated as a first-class extracted field
+Evidence: Source report had HbA1c 7.1% explicitly printed and flagged
+HIGH. Output only referenced it in a prose sentence ("fasting glucose
+and HbA1c concordantly indicate...") with no visible value, no
+dedicated card, no ADA classification badge, and it was absent from
+"What's Affecting Your Score" despite being source-flagged — unlike
+Fasting Glucose, which got a full value + classification + impact card.
+Fix required: HbA1c must be extracted, displayed, and classified as
+its own field, structurally parallel to how Fasting Glucose is
+currently handled (value, unit, ADA range badge, source-flagged tag,
+its own risk-factor card).
+
+### Bug C: "Data-limited" / field-count logic is miscounting
+Evidence: A report with BMI + Height + Weight + Waist Circumference
+(4 valid fields) triggered the message "Assessment is data-limited as
+fewer than two metabolic fields were available" — while the same
+output simultaneously gave a fully confident Obese classification with
+a waist-circumference risk-modifier explanation two sections above.
+Fix required: the field-count check feeding the "data-limited" message
+must count against the same verified field set used elsewhere in the
+same response — currently it's contradicting the rest of the output on
+the same page.
+
+---
+
+## STILL OPEN — MEDIUM PRIORITY (from earlier testing, not yet
+re-verified against the current rebuild — retest after A/B/C are fixed)
+
+### Bug D: Report-type/document classification can be wrong
+Evidence (pre-rebuild test): A Diabetes & Metabolic Screen report was
+processed and rendered under a "CBC Hematology" template — the system
+displayed a fabricated "Hemoglobin 7.1 g/dL, Clinical Anemia Threshold"
+finding that doesn't exist in the source (7.1 was actually the HbA1c
+value, mislabeled). Diabetes-relevant fields (FBG, HbA1c-as-such, BMI)
+were entirely absent from that run's output.
+Needs retest: upload a clearly-labeled diabetes/metabolic report and
+confirm it is not misclassified as a different report type.
+
+### Bug E: Audit gate historically claimed "Verified"/"Passed" when it
+hadn't actually checked what it claimed to check
+Evidence (pre-rebuild): multiple instances where "AUDIT PASSED — all
+numeric claims verified, all flagged abnormalities accounted for" was
+shown alongside outputs that contained wrong reference ranges, a fully
+inverted flagged-value classification (MCV shown as protective when
+source-flagged as abnormal), or entirely missing flagged fields.
+Needs retest: for every future audit-gate "Passed" label, confirm
+100% of source-flagged fields actually appear in the output and 100%
+of numeric claims match the source before displaying that label ever
+becomes trustworthy again. This is a trust-critical bug — a false
+"Verified" badge is worse than no badge.
+
+### Bug F: Narrative/synthesis text can contradict its own classification
+Evidence (post-rebuild, test on Normal-range patient): "Combined
+Synthesis" stated that two Normal findings (glucose + BMI both Normal)
+"compounds insulin resistance and indicates elevated metabolic concern"
+— directly contradicting the "All Monitored Biomarkers Within Normal
+Range" statement in the same output.
+Fix required: add an explicit consistency check — if all classifications
+are Normal, synthesis text must not contain risk-escalating language
+("compounds," "elevated concern," "requiring intervention"). This needs
+to be a real automated check (e.g. keyword/logic check against the
+classification tier), not just a prompt instruction, since prompt-only
+instructions have already failed to prevent this exact pattern twice
+across two different report types.
+
+### Bug G (pre-rebuild, needs retest under new pipeline): Extraction
+failure can silently produce a different fabricated patient profile on
+every run
+Evidence: Re-uploading the identical file twice (same real patient:
+FBG 160, BMI 33.9) produced two different fake "healthy" profiles
+(different BMI, different weight, different BMR/TDEE, one run included
+Triglycerides in the narrative and the other omitted it entirely) —
+neither matching the real source data. This indicates the model was
+generating content ungrounded from any real extraction, differently
+each time.
+Needs retest: re-upload the same file 2-3 times in a row and confirm
+identical, correct output every time (not just correct once).
+
+---
+
+## Testing checklist for Antigravity to run after fixes
+- Re-upload the same report 2-3× — output must be identical each time
+  (tests Bug G)
+- Upload a diabetes-labeled report and confirm it isn't rendered as a
+  CBC/hematology template (tests Bug D)
+- Upload a report with 4+ valid fields and confirm "data-limited"
+  messaging does not fire (tests Bug C)
+- Upload a report with only BMI/height/weight (no glucose) and confirm
+  the SAME height/weight appears in both the diabetes/obesity module
+  AND the nutrition module (tests Bug A)
+- Confirm HbA1c gets its own card/value/classification whenever present
+  and flagged in source (tests Bug B)
+- Confirm "Audit Passed" is never shown unless a real string-match
+  check ran against source data (tests Bug E)
+- Upload an all-Normal report and confirm synthesis text uses
+  reassuring, not risk-escalating, language (tests Bug F)
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-09-05T12:18:05+05:30.
+
+The user's current state is as follows:
+Other open documents:
+- c:\Users\rsaha\Downloads\LifeMap AI\backend\src\controllers\authController.js (LANGUAGE_JAVASCRIPT)
+- c:\Users\rsaha\Downloads\LifeMap AI\ml_service\train_models.py (LANGUAGE_PYTHON)
+- c:\Users\rsaha\Downloads\LifeMap AI\frontend\src\app\recommendations\page.tsx (LANGUAGE_TSX)
+- c:\Users\rsaha\Downloads\LifeMap AI\frontend\src\app\login\page.tsx (LANGUAGE_TSX)
+- c:\Users\rsaha\Downloads\LifeMap AI\ml_service\ocr_pipeline.py (LANGUAGE_PYTHON)
+</ADDITIONAL_METADATA>

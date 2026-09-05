@@ -1,0 +1,68 @@
+{
+  "diabetes": {
+    "selected_model": "XGBoost",
+    "metrics": {
+      "accuracy": 0.967695154273141,
+      "precision": 0.863448275862069,
+      "recall": 0.7364705882352941,
+      "f1_score": 0.7949206349206349,
+      "roc_auc": 0.9794466627444551
+    },
+    "comparison": {
+      "Logistic Regression": {
+        "accuracy": 0.8881832274841226,
+        "precision": 0.4247191011235955,
+        "recall": 0.8894117647058823,
+        "f1_score": 0.5749049429657794,
+        "roc_auc": 0.9625992528508371
+      },
+      "Random Forest": {
+        "accuracy": 0.9149372405860879,
+        "precision": 0.49983471074380165,
+        "recall": 0.8894117647058823,
+        "f1_score": 0.64,
+        "roc_auc": 0.9763489032274658
+      },
+      "XGBoost": {
+        "accuracy": 0.967695154273141,
+        "precision": 0.863448275862069,
+        "recall": 0.7364705882352941,
+        "f1_score": 0.7949206349206349,
+        "roc_auc": 0.9794466627444551
+      }
+    }
+  },
+  "cardiovascular": {
+    "selected_model": "XGBoost",
+    "metrics": {
+      "accuracy": 0.8315217391304348,
+      "precision": 0.8034188034188035,
+      "recall": 0.9215686274509803,
+      "f1_score": 0.8584474885844748,
+      "roc_auc": 0.8958632233381157
+    },
+    "comparison": {
+      "Logistic Regression": {
+        "accuracy": 0.8097826086956522,
+        "precision": 0.8252427184466019,
+        "recall": 0.8333333333333334,
+        "f1_score": 0.8292682926829268,
+        "roc_auc": 0.8892874222859877
+      },
+      "Random Forest": {
+        "accuracy": 0.8097826086956522,
+        "precision": 0.8130841121495327,
+        "recall": 0.8529411764705882,
+        "f1_score": 0.8325358851674641,
+        "roc_auc": 0.8992109038737447
+      },
+      "XGBoost": {
+        "accuracy": 0.8315217391304348,
+        "precision": 0.8034188034188035,
+        "recall": 0.9215686274509803,
+        "f1_score": 0.8584474885844748,
+        "roc_auc": 0.8958632233381157
+      }
+    }
+  }
+}
