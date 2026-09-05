@@ -542,7 +542,7 @@ export default function DashboardPage() {
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center gap-2">
                 <span className="px-3 py-1 rounded-full bg-[#89f5e7] text-[#005049] text-xs font-bold flex items-center gap-1.5 shadow-2xs">
-                  <span className="material-symbols-outlined text-[15px] text-[#00685f]">sparkles</span>
+                  <span className="text-[14px]">✨</span>
                   {isLiveUser ? 'Live Calculated Report' : 'Sample Demonstration'}
                 </span>
                 <span className="text-xs text-gray-500 dark:text-gray-400">

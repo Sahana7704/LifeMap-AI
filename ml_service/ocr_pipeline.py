@@ -706,6 +706,7 @@ def process_medical_report(file_bytes: bytes, filename: str) -> Dict[str, Any]:
                     "obesity_assessment": obesity_ass,
                     "combined_risk_note": combined_note,
                     "step4_audit": audit_res,
+                    "hba1c_ocr_note": pipeline_res.get("hba1c_ocr_note") or verified.get("hba1c_ocr_note"),
                     "pipeline_version": "metabolic_v1_ada_who",
                     "pipeline_status": pipeline_res.get("pipeline_status", "APPROVED")
                 },

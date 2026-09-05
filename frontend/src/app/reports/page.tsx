@@ -198,9 +198,32 @@ export default function ReportsPage() {
     try {
       const obj = (typeof m === 'string' ? JSON.parse(m) : m) || {};
       const cleaned: Record<string, any> = {};
+      const EXCLUDED_KEYS = new Set([
+        'pipeline_version',
+        'pipeline_status',
+        'raw_text_char_count',
+        'extraction_confidence',
+        'step_confidence',
+        'extraction_method',
+        'bmi_source',
+        'combined_risk_note',
+        'source_flagged_confirmed',
+        'module',
+        'data_limited',
+        'hba1c_ocr_note',
+        'report_type',
+        'report_date',
+        'patient_name',
+        'gender',
+        'sex',
+        'age',
+      ]);
       Object.entries(obj).forEach(([k, v]) => {
         if (v !== null && v !== undefined && v !== '' && typeof v !== 'object') {
-          cleaned[k] = v;
+          const lowerK = k.toLowerCase();
+          if (!EXCLUDED_KEYS.has(lowerK) && !lowerK.startsWith('_') && !lowerK.includes('pipeline') && !lowerK.includes('audit')) {
+            cleaned[k] = v;
+          }
         }
       });
       return cleaned;
@@ -211,6 +234,7 @@ export default function ReportsPage() {
 
   const getMetricUnit = (key: string) => {
     const k = key.toLowerCase();
+    if (k.includes('source') || k.includes('status') || k.includes('method') || k.includes('version')) return '';
     if (k.includes('hemoglobin') || k === 'hb' || k.includes('mchc')) return 'g/dL';
     if (k.includes('pcv') || k.includes('hematocrit') || k.includes('hba1c') || k.includes('neutrophil') || k.includes('lymphocyte') || k.includes('eosinophil') || k.includes('monocyte') || k.includes('basophil') || k.includes('rdw')) return '%';
     if (k.includes('platelet') || k.includes('wbc')) return 'cumm';
@@ -221,10 +245,11 @@ export default function ReportsPage() {
       return 'mg/dL';
     }
     if (k.includes('bp') || k.includes('pressure')) return 'mmHg';
-    if (k.includes('bmi')) return 'kg/m²';
-    if (k.includes('age')) return 'yrs';
+    if (k === 'bmi' || k === 'body_mass_index') return 'kg/m²';
+    if (k === 'age') return 'yrs';
     if (k.includes('height')) return 'cm';
     if (k.includes('weight')) return 'kg';
+    if (k.includes('waist')) return 'cm';
     return '';
   };
 
@@ -610,11 +635,21 @@ export default function ReportsPage() {
                           )}
                         </div>
                         <p className="text-lg font-extrabold text-gray-900 dark:text-gray-100 mt-1">
-                          {selected.extracted_metrics?.hba1c != null ? `${selected.extracted_metrics.hba1c} %` : 'Not in report'}
+                          {selected.extracted_metrics?.hba1c != null 
+                            ? `${selected.extracted_metrics.hba1c} %` 
+                            : selected.extracted_metrics?.hba1c_ocr_note 
+                            ? 'Unclear in scan' 
+                            : 'Not in report'}
                         </p>
-                        <p className="text-[10px] text-gray-400 mt-0.5">
-                          Ref: &lt;5.7% Normal · 5.7–6.4% Prediabetes · &ge;6.5% Diabetes
-                        </p>
+                        {selected.extracted_metrics?.hba1c_ocr_note && selected.extracted_metrics?.hba1c == null ? (
+                          <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1 font-medium leading-tight">
+                            ⚠️ {selected.extracted_metrics.hba1c_ocr_note}
+                          </p>
+                        ) : (
+                          <p className="text-[10px] text-gray-400 mt-0.5">
+                            Ref: &lt;5.7% Normal · 5.7–6.4% Prediabetes · &ge;6.5% Diabetes
+                          </p>
+                        )}
                       </div>
                     </div>
 
