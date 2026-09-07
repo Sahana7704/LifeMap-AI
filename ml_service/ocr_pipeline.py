@@ -12,7 +12,11 @@ _cur_dir = os.path.dirname(os.path.abspath(__file__))
 if _cur_dir not in sys.path:
     sys.path.insert(0, _cur_dir)
 
-# 1. High-Performance OCR Engines: RapidOCR (Primary, fast ONNX) + EasyOCR / Tesseract fallback
+os.environ.setdefault("OMP_NUM_THREADS", "2")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
+os.environ.setdefault("MKL_NUM_THREADS", "2")
+
+# 1. High-Performance OCR Engines: Tesseract (Fast native) + RapidOCR (ONNX fallback)
 RAPID_OCR = None
 
 def get_rapid_ocr():
@@ -25,7 +29,7 @@ def get_rapid_ocr():
             print(f"Notice: RapidOCR initialization error: {e}")
     return RAPID_OCR
 
-# Optional Tesseract support
+# Tesseract support
 HAS_TESSERACT = False
 try:
     import pytesseract
@@ -43,14 +47,33 @@ except Exception:
     HAS_TESSERACT = False
 
 def extract_text_from_image(image_bytes: bytes) -> str:
-    """Preprocess and extract clean document text using high-performance RapidOCR ONNX."""
+    """Preprocess and extract clean document text efficiently without CPU thrashing."""
     try:
         nparr = np.frombuffer(image_bytes, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if image is None:
             return ""
 
-        # Strategy 1: High-precision RapidOCR (native ONNX, excels on tabular pathology text, < 5s)
+        # Normalize resolution: if image is too large (> 1600px), downscale to prevent extreme CPU lag
+        h, w = image.shape[:2]
+        if max(h, w) > 1600:
+            scale = 1400.0 / max(h, w)
+            image = cv2.resize(image, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+
+        # Strategy 1: Fast native Tesseract OCR (< 2 seconds)
+        if HAS_TESSERACT:
+            try:
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                # Try tabular/uniform block layout (PSM 6) first, then default
+                res = pytesseract.image_to_string(gray, config='--oem 3 --psm 6')
+                if not res or len(res.strip()) < 30:
+                    res = pytesseract.image_to_string(gray)
+                if res and len(res.strip()) >= 30:
+                    return res.strip()
+            except Exception as e:
+                print(f"Tesseract primary extraction notice: {e}")
+
+        # Strategy 2: High-precision RapidOCR (native ONNX)
         rapid = get_rapid_ocr()
         if rapid is not None:
             try:
@@ -61,29 +84,14 @@ def extract_text_from_image(image_bytes: bytes) -> str:
                     if len(text) >= 10:
                         return text
             except Exception as e:
-                print(f"RapidOCR primary extraction notice: {e}")
+                print(f"RapidOCR extraction notice: {e}")
 
-            # Strategy 2: Upscale image for small pathology fonts with RapidOCR
-            try:
-                h, w = image.shape[:2]
-                if h < 1200 or w < 900:
-                    scale = min(2.5, 1400.0 / max(h, w))
-                    upscaled = cv2.resize(image, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_LANCZOS4)
-                    results, _ = rapid(upscaled)
-                    if results and len(results) > 0:
-                        lines = [item[1] for item in results if item and len(item) > 1]
-                        text = "\n".join(lines).strip()
-                        if len(text) >= 10:
-                            return text
-            except Exception as e:
-                print(f"RapidOCR upscaled extraction notice: {e}")
-
-        # Strategy 3: Pytesseract fallback if installed
+        # Strategy 3: Pytesseract standard fallback
         if HAS_TESSERACT:
             try:
                 res = pytesseract.image_to_string(image)
                 if len(res.strip()) >= 10:
-                    return res
+                    return res.strip()
             except Exception:
                 pass
 

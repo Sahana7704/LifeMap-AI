@@ -55,7 +55,7 @@ async function extractReport(fileBuffer, filename, mimetype = 'application/pdf')
     });
     const response = await axios.post(url, form, {
       headers: form.getHeaders(),
-      timeout: 120000,
+      timeout: 240000,
       maxContentLength: Infinity,
       maxBodyLength: Infinity
     });
@@ -73,7 +73,7 @@ async function extractMetabolicReport(fileBuffer, filename, mimetype = 'applicat
     });
     const response = await axios.post(url, form, {
       headers: form.getHeaders(),
-      timeout: 120000,
+      timeout: 240000,
       maxContentLength: Infinity,
       maxBodyLength: Infinity
     });
