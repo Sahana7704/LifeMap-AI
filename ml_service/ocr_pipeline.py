@@ -233,33 +233,61 @@ def parse_metrics_from_text(raw_text: str) -> Dict[str, Any]:
         except ValueError:
             pass
 
-    # Gender (Bug L fix: handle Age/Sex: 44/M, 47/F, titles, etc.)
+    # Gender (Bug L fix: handle DOB info: Age 35, Female, Age/Sex: 44/M, 47/F, titles, etc.)
     gender_found = None
-    if re.search(r'\b(?:mrs|ms|miss)\b', raw_text, re.IGNORECASE):
-        gender_found = "Female"
-    elif re.search(r'\bmr\b', raw_text, re.IGNORECASE):
-        gender_found = "Male"
-    else:
-        m_combo = re.search(r'(?:age\s*[\/\\]\s*)?(?:sex|gender)\s*[:\-\|\=\.]*\s*(?:[0-9]{1,3}\s*(?:years?|yrs?|y)?\s*[\/\\]\s*)?(m[as]le|fe?male|[mf]\b)', raw_text, re.IGNORECASE)
+    # Priority 1: Explicit labeled pattern
+    m_explicit = re.search(r'(?:\bsex|\bgender)\s*[:\-\|\=\.]*\s*(female\b|male\b|f\b|m\b)', raw_text, re.I)
+    if m_explicit:
+        raw_val = m_explicit.group(1).lower()
+        gender_found = "Female" if raw_val in ['f', 'female'] else "Male"
+
+    # Priority 2: Near Age / DOB / Demographic context with comma, slash, semicolon, hyphen or pipe
+    if not gender_found:
+        m_demo = re.search(
+            r'\b(?:age|dob|demographics?|patient\s*info|info)?\s*[:\-\|\=\.]*\s*(?:age\s*[:\-\|\=\.]*\s*)?[0-9]{1,3}\s*(?:years?|yrs?|y)?\s*[\s,\|\/\;\-]+\s*(female\b|male\b|f\b|m\b)',
+            raw_text,
+            re.I
+        )
+        if m_demo:
+            raw_val = m_demo.group(1).lower()
+            gender_found = "Female" if raw_val in ['f', 'female'] else "Male"
+
+    # Priority 2b: Reversed demographic pattern: 'Female, 35 Years', 'Male / 42 Y'
+    if not gender_found:
+        m_demo_rev = re.search(
+            r'\b(female\b|male\b|f\b|m\b)\s*[\s,\|\/\;\-]+\s*(?:age\s*[:\-\|\=\.]*\s*)?[0-9]{1,3}\s*(?:years?|yrs?|y)?\b',
+            raw_text,
+            re.I
+        )
+        if m_demo_rev:
+            raw_val = m_demo_rev.group(1).lower()
+            gender_found = "Female" if raw_val in ['f', 'female'] else "Male"
+
+    # Priority 3: Age/Sex combined inline or slash pattern
+    if not gender_found:
+        m_combo = re.search(r'(?:age\s*[\/\\]\s*)?(?:sex|gender)\s*[:\-\|\=\.]*\s*(?:[0-9]{1,3}\s*(?:years?|yrs?|y)?\s*[\/\\]\s*)?(female\b|male\b|f\b|m\b)', raw_text, re.I)
         if m_combo:
             raw_val = m_combo.group(1).lower()
-            if raw_val in ['m', 'male', 'msle']:
-                gender_found = "Male"
-            elif raw_val in ['f', 'female', 'femail']:
-                gender_found = "Female"
-        if not gender_found:
-            m_slash = re.search(r'\b[0-9]{1,3}\s*(?:years?|yrs?|y)?\s*[\/\\]\s*([mf]\b|male|female)', raw_text, re.IGNORECASE)
-            if m_slash:
-                raw_val = m_slash.group(1).lower()
-                if raw_val in ['m', 'male']:
-                    gender_found = "Male"
-                elif raw_val in ['f', 'female']:
-                    gender_found = "Female"
-        if not gender_found:
-            if re.search(r'\bfemale\b', raw_text, re.IGNORECASE):
-                gender_found = "Female"
-            elif re.search(r'\bmale\b', raw_text, re.IGNORECASE):
-                gender_found = "Male"
+            gender_found = "Female" if raw_val in ['f', 'female'] else "Male"
+
+    # Priority 4: Patient prefix titles
+    if not gender_found:
+        if re.search(r'(?:patient\s*(?:name)?|pt\s*name|name)\s*[:\-\|\=\.]*\s*(?:mrs|ms|miss|smt)\b', raw_text, re.I) or re.search(r'\b(?:mrs|ms|miss|smt)\.\s+[A-Z]', raw_text, re.I):
+            gender_found = "Female"
+        elif re.search(r'(?:patient\s*(?:name)?|pt\s*name|name)\s*[:\-\|\=\.]*\s*(?:mr|shri)\b', raw_text, re.I) or re.search(r'\b(?:mr|shri)\.\s+[A-Z]', raw_text, re.I):
+            gender_found = "Male"
+
+    # Priority 5: Full word in demographic header lines
+    if not gender_found:
+        for line in raw_text.split('\n')[:25]:
+            if re.search(r'\b(?:patient|name|dob|age|demo|years|yrs|client|uhid|mrn|visit|doctor|dr\.)\b', line, re.I):
+                if not re.search(r'\b(?:reference|interval|range|biological)\b', line, re.I):
+                    if re.search(r'\bfemale\b', line, re.I):
+                        gender_found = "Female"
+                        break
+                    elif re.search(r'\bmale\b', line, re.I):
+                        gender_found = "Male"
+                        break
 
     if gender_found:
         metrics["gender"] = gender_found

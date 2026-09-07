@@ -673,12 +673,12 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
     except Exception as e:
         logger.exception(f"[Step 1 Extraction] Failed extracting age: {e}")
 
-    # Sex (Scans independently across document, robust for Bug L: inline all-caps, combined, titles)
+    # Sex (Scans independently across document, robust for Bug L: explicit labels, inline all-caps, DOB info clauses, and demographic tokens)
     sex = None
     try:
         # Priority 1: Explicit labeled pattern (handles "SEX: M", "GENDER: MALE", "AGE: 60 SEX: M", "Sex: Male", etc.)
         m_explicit = re.search(
-            r'(?:\bsex|\bgender)\s*[:\-\|\=\.]*\s*(male\b|female\b|m\b|f\b)',
+            r'(?:\bsex|\bgender)\s*[:\-\|\=\.]*\s*(female\b|male\b|f\b|m\b)',
             normalized_text,
             re.I
         )
@@ -686,22 +686,38 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
             val = m_explicit.group(1).lower()
             sex = "Female" if val in ['f', 'female'] else "Male"
 
-        # Priority 2: Age/Sex combined inline or slash pattern ("AGE: 60 / SEX: M", "Age/Sex: 45/M", "Age/Gender: 60 / Male")
+        # Priority 2: Near Age / DOB / Demographic context with comma, slash, semicolon, hyphen or pipe
+        # Matches e.g. 'DOB info: Age 35, Female', 'Age 35, Female', 'Age: 35 yrs, F', '35 Y / Female', etc.
+        if not sex:
+            m_demo = re.search(
+                r'\b(?:age|dob|demographics?|patient\s*info|info)?\s*[:\-\|\=\.]*\s*(?:age\s*[:\-\|\=\.]*\s*)?[0-9]{1,3}\s*(?:years?|yrs?|y)?\s*[\s,\|\/\;\-]+\s*(female\b|male\b|f\b|m\b)',
+                normalized_text,
+                re.I
+            )
+            if m_demo:
+                val = m_demo.group(1).lower()
+                sex = "Female" if val in ['f', 'female'] else "Male"
+
+        # Priority 2b: Reversed demographic pattern: 'Female, 35 Years', 'Male / 42 Y'
+        if not sex:
+            m_demo_rev = re.search(
+                r'\b(female\b|male\b|f\b|m\b)\s*[\s,\|\/\;\-]+\s*(?:age\s*[:\-\|\=\.]*\s*)?[0-9]{1,3}\s*(?:years?|yrs?|y)?\b',
+                normalized_text,
+                re.I
+            )
+            if m_demo_rev:
+                val = m_demo_rev.group(1).lower()
+                sex = "Female" if val in ['f', 'female'] else "Male"
+
+        # Priority 3: Age/Sex combined inline or slash pattern ("AGE: 60 / SEX: M", "Age/Sex: 45/M", "Age/Gender: 60 / Male")
         if not sex:
             m_combo = re.search(
-                r'(?:age\s*[\/\\]\s*(?:sex|gender)|(?:sex|gender)\s*[\/\\]\s*age)\s*[:\-\|\=\.]*\s*(?:[0-9]{1,3}\s*(?:years?|yrs?|y)?\s*[\/\\]\s*)?(male\b|female\b|m\b|f\b)',
+                r'(?:age\s*[\/\\]\s*(?:sex|gender)|(?:sex|gender)\s*[\/\\]\s*age)\s*[:\-\|\=\.]*\s*(?:[0-9]{1,3}\s*(?:years?|yrs?|y)?\s*[\/\\]\s*)?(female\b|male\b|f\b|m\b)',
                 normalized_text,
                 re.I
             )
             if m_combo:
                 val = m_combo.group(1).lower()
-                sex = "Female" if val in ['f', 'female'] else "Male"
-
-        # Priority 3: Age number followed directly by slash and sex ("45 Y / M", "60/Male")
-        if not sex:
-            m_slash = re.search(r'\b[0-9]{1,3}\s*(?:years?|yrs?|y)?\s*[\/\\]\s*(male\b|female\b|m\b|f\b)', normalized_text, re.I)
-            if m_slash:
-                val = m_slash.group(1).lower()
                 sex = "Female" if val in ['f', 'female'] else "Male"
 
         # Priority 4: Patient prefix title (anchored to name, NOT standalone "ms" which matches abbreviations or M/S)
@@ -710,6 +726,18 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
                 sex = "Male"
             elif re.search(r'(?:patient\s*(?:name)?|pt\s*name|name)\s*[:\-\|\=\.]*\s*(?:mrs|ms|miss|smt)\b', normalized_text, re.I) or re.search(r'\b(?:mrs|ms|miss|smt)\.\s+[A-Z]', normalized_text, re.I):
                 sex = "Female"
+
+        # Priority 5: Full word Female or Male in demographic header lines (excluding lab reference intervals)
+        if not sex:
+            for line in normalized_text.split('\n')[:25]:
+                if re.search(r'\b(?:patient|name|dob|age|demo|years|yrs|client|uhid|mrn|visit|doctor|dr\.)\b', line, re.I):
+                    if not re.search(r'\b(?:reference|interval|range|biological)\b', line, re.I):
+                        if re.search(r'\bfemale\b', line, re.I):
+                            sex = "Female"
+                            break
+                        elif re.search(r'\bmale\b', line, re.I):
+                            sex = "Male"
+                            break
     except Exception as e:
         logger.exception(f"[Step 1 Extraction] Failed extracting sex: {e}")
 
