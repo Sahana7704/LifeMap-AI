@@ -140,6 +140,9 @@ export default function ReportsPage() {
         }
       }
       if (!res.ok) {
+        if (data.pipeline_status === 'REJECTED_NON_PATIENT_DOCUMENT') {
+          throw new Error(data.error || data.message || 'This appears to be a research or statistical summary table, not an individual lab report. Please upload your own personal diagnostic report.');
+        }
         if (data.pipeline_status === 'HARD_STOP_PRE_GENERATION') {
           throw new Error(data.error || 'Could not extract diabetes or obesity-relevant values from this report. Please upload a report with glucose/HbA1c results or height & weight / BMI.');
         }
@@ -654,11 +657,52 @@ export default function ReportsPage() {
                           </p>
                         )}
                       </div>
+                      {/* Post-Prandial (PP) Glucose */}
+                      {(selected.extracted_metrics?.post_prandial_glucose != null || selected.extracted_metrics?.pp_glucose_ocr_note) && (
+                        <div className="p-3 bg-white dark:bg-gray-800 rounded-xl border border-gray-200/80 dark:border-gray-700">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] text-gray-400 font-medium">Post-Prandial Glucose (2-Hr)</span>
+                            {selected.extracted_metrics?.post_prandial_glucose != null && (
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                                selected.extracted_metrics.post_prandial_glucose >= 200
+                                  ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                                  : selected.extracted_metrics.post_prandial_glucose >= 140
+                                  ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                                  : selected.extracted_metrics.post_prandial_glucose < 70
+                                  ? 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300'
+                                  : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                              }`}>
+                                {selected.extracted_metrics.post_prandial_glucose >= 200
+                                  ? 'Diagnostic range'
+                                  : selected.extracted_metrics.post_prandial_glucose >= 140
+                                  ? 'Prediabetes range'
+                                  : selected.extracted_metrics.post_prandial_glucose < 70
+                                  ? 'Low (Hypoglycemia)'
+                                  : 'Normal range'}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-lg font-extrabold text-gray-900 dark:text-gray-100 mt-1">
+                            {selected.extracted_metrics?.post_prandial_glucose != null
+                              ? `${selected.extracted_metrics.post_prandial_glucose} mg/dL`
+                              : 'Unclear in scan'}
+                          </p>
+                          {selected.extracted_metrics?.pp_glucose_ocr_note && selected.extracted_metrics?.post_prandial_glucose == null ? (
+                            <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1 font-medium leading-tight">
+                              ⚠️ {selected.extracted_metrics.pp_glucose_ocr_note}
+                            </p>
+                          ) : (
+                            <p className="text-[10px] text-gray-400 mt-0.5">
+                              Ref: &lt;140 Normal · 140–199 Prediabetes · &ge;200 Diabetes
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
 
-                    {selected.extracted_metrics?.fasting_glucose != null && selected.extracted_metrics?.hba1c != null && (
+                    {(selected.extracted_metrics?.fasting_glucose != null || selected.extracted_metrics?.post_prandial_glucose != null) && selected.extracted_metrics?.hba1c != null && (
                       <p className="text-[11px] text-gray-500 italic">
-                        Note: Fasting glucose and HbA1c are reported separately as distinct physiological markers — never averaged.
+                        Note: Glycemic markers (Fasting, Post-Prandial, HbA1c) are evaluated independently per ADA clinical criteria — never averaged.
                       </p>
                     )}
                   </div>

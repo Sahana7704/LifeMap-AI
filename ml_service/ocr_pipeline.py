@@ -433,18 +433,24 @@ def parse_metrics_from_text(raw_text: str) -> Dict[str, Any]:
     # 11. Fasting Blood Glucose (mg/dL) - robust multi-section scanning
     try:
         from metabolic_pipeline import extract_field_robust
-        fg_val, _, _ = extract_field_robust(
+        fg_val, *_ = extract_field_robust(
             raw_text,
-            [r'fasting\s*(?:blood\s*)?(?:glucose|sugar)', r'fbs', r'fbg', r'glucose\s*\(?fasting\)?'],
+            [r'fasting\s*(?:blood\s*)?(?:glucose|sugar)', r'\bfbs\b', r'\bfbg\b', r'glucose\s*\(?fasting\)?'],
             40.0, 500.0,
-            unit_pattern=r'(?:mg\s*[\/\.]\s*d[lL]|mmol\s*[\/\.]\s*[lL])'
+            unit_pattern=r'(?:mg\s*[\/\.]\s*d[lL]|mmol\s*[\/\.]\s*[lL])',
+            exclude_headers=[r'estimated\s+avg(?:erage)?\s+glucose', r'\beag\b', r'mean\s+(?:blood\s+)?glucose', r'post\s*prandial', r'\bppbs\b', r'\bppbg\b']
         )
         if fg_val is None and not is_cbc:
-            fg_val, _, _ = extract_field_robust(
-                raw_text,
+            cleaned_lines = [
+                line for line in raw_text.split('\n')
+                if not re.search(r'\b(?:estimated|eag|post\s*prandial|ppbs|ppbg|random|rbs)\b', line, re.I)
+            ]
+            fg_val, *_ = extract_field_robust(
+                '\n'.join(cleaned_lines),
                 [r'blood\s*(?:glucose|sugar)', r'\bglucose\b'],
                 40.0, 500.0,
-                unit_pattern=r'(?:mg\s*[\/\.]\s*d[lL]|mmol\s*[\/\.]\s*[lL])'
+                unit_pattern=r'(?:mg\s*[\/\.]\s*d[lL]|mmol\s*[\/\.]\s*[lL])',
+                exclude_headers=[r'estimated\s+avg(?:erage)?\s+glucose', r'\beag\b', r'mean\s+(?:blood\s+)?glucose']
             )
         if fg_val is not None:
             metrics["glucose"] = fg_val
@@ -452,10 +458,33 @@ def parse_metrics_from_text(raw_text: str) -> Dict[str, Any]:
     except Exception as e:
         pass
 
+    # 11b. Post-Prandial (PP) Glucose (mg/dL)
+    try:
+        from metabolic_pipeline import extract_field_robust
+        pp_val, *_ = extract_field_robust(
+            raw_text,
+            [
+                r'post\s*prandial\s*(?:plasma\s*|blood\s*)?(?:glucose|sugar)',
+                r'\bppbs\b',
+                r'\bppbg\b',
+                r'glucose\s*\(?pp\)?',
+                r'blood\s*sugar\s*\(?pp\)?',
+                r'2\s*[-–—]?\s*h(?:ou)?r\s*post\s*(?:meal|glucose)'
+            ],
+            30.0, 500.0,
+            unit_pattern=r'(?:mg\s*[\/\.]\s*d[lL]|mmol\s*[\/\.]\s*[lL])',
+            exclude_headers=[r'fasting', r'\bfbs\b', r'\bfbg\b', r'estimated\s+avg(?:erage)?\s+glucose', r'\beag\b']
+        )
+        if pp_val is not None:
+            metrics["pp_glucose"] = pp_val
+            flags["pp_glucose"] = "NORMAL" if pp_val < 140 else ("PREDIABETIC" if pp_val < 200 else "DIABETIC")
+    except Exception as e:
+        pass
+
     # 12. HbA1c (%) - robust multi-section scanning
     try:
         from metabolic_pipeline import extract_field_robust
-        hba1c_val, _, _ = extract_field_robust(
+        hba1c_val, *_ = extract_field_robust(
             raw_text,
             [r'hba1c', r'hb\s*[-–]?\s*a1c', r'a1c', r'(?:glycated|glycosylated)\s*(?:ha?emoglobin|hb)'],
             3.5, 20.0,
@@ -585,6 +614,44 @@ def process_medical_report(file_bytes: bytes, filename: str) -> Dict[str, Any]:
             except Exception:
                 pass
 
+    # Step 0 Gate: Pre-extraction document-classification check (Bug R: reject research tables)
+    from metabolic_pipeline import validate_document_type
+    is_valid_doc, rejection_signals = validate_document_type(raw_text)
+    if not is_valid_doc:
+        err_msg = (
+            "This appears to be a research or statistical summary table, not an individual lab report. "
+            "Please upload your own personal diagnostic report."
+        )
+        return {
+            "filename": filename,
+            "report_type": "Research / Statistical Summary Table (Non-Patient)",
+            "raw_text": raw_text.strip(),
+            "extracted_metrics": {
+                "error": err_msg,
+                "pipeline_status": "REJECTED_NON_PATIENT_DOCUMENT"
+            },
+            "clinical_flags": {},
+            "extraction_confidence": 0.0,
+            "unmeasured_panels": [],
+            "summary": err_msg,
+            "structured_summary": {
+                "error": err_msg
+            },
+            "pipeline_status": "REJECTED_NON_PATIENT_DOCUMENT",
+            "error": err_msg,
+            "data_quality_flags": [f"REJECTED: Population statistical signals detected: {', '.join(rejection_signals)}"],
+            "risk_score": None,
+            "risk_category": "Unassessed",
+            "vitality_score": None,
+            "summary_sentence": err_msg,
+            "things_affecting_score": [],
+            "protective_factors": [],
+            "step4_audit": {
+                "audit_passed": False,
+                "audit_label": "Rejected Non-Patient Document"
+            }
+        }
+
     parsed = parse_metrics_from_text(raw_text)
     m = parsed["metrics"]
     f = parsed["flags"]
@@ -685,6 +752,9 @@ def process_medical_report(file_bytes: bytes, filename: str) -> Dict[str, Any]:
             if diabetes_ass.get("fasting_glucose_status"):
                 fg_st = diabetes_ass["fasting_glucose_status"]
                 metabolic_flags["fasting_glucose"] = "HIGH" if "Diagnostic" in fg_st else ("BORDERLINE" if "Prediabetes" in fg_st else "NORMAL")
+            if diabetes_ass.get("post_prandial_glucose_status"):
+                pp_st = diabetes_ass["post_prandial_glucose_status"]
+                metabolic_flags["post_prandial_glucose"] = "HIGH" if "Diagnostic" in pp_st else ("BORDERLINE" if "Prediabetes" in pp_st else ("LOW" if "Low" in pp_st else "NORMAL"))
             if diabetes_ass.get("hba1c_status"):
                 a1c_st = diabetes_ass["hba1c_status"]
                 metabolic_flags["hba1c"] = "HIGH" if "Diagnostic" in a1c_st else ("BORDERLINE" if "Prediabetes" in a1c_st else "NORMAL")
@@ -694,6 +764,8 @@ def process_medical_report(file_bytes: bytes, filename: str) -> Dict[str, Any]:
             if obesity_ass.get("central_obesity"):
                 metabolic_flags["waist_circumference"] = "HIGH"
 
+            pp_glu = verified.get("post_prandial_glucose", {}).get("value") if isinstance(verified.get("post_prandial_glucose"), dict) else verified.get("post_prandial_glucose")
+
             return {
                 "filename": filename,
                 "report_type": "Metabolic Panel (Diabetes & Obesity)",
@@ -701,6 +773,7 @@ def process_medical_report(file_bytes: bytes, filename: str) -> Dict[str, Any]:
                 "extracted_metrics": {
                     "report_type": "Metabolic Panel (Diabetes & Obesity)",
                     "fasting_glucose": f_glu,
+                    "post_prandial_glucose": pp_glu,
                     "hba1c": hba1c_val,
                     "random_glucose": verified.get("random_glucose", {}).get("value") if isinstance(verified.get("random_glucose"), dict) else verified.get("random_glucose"),
                     "bmi": bmi_num,
@@ -715,6 +788,8 @@ def process_medical_report(file_bytes: bytes, filename: str) -> Dict[str, Any]:
                     "combined_risk_note": combined_note,
                     "step4_audit": audit_res,
                     "hba1c_ocr_note": pipeline_res.get("hba1c_ocr_note") or verified.get("hba1c_ocr_note"),
+                    "fasting_glucose_ocr_note": pipeline_res.get("fasting_glucose_ocr_note"),
+                    "pp_glucose_ocr_note": pipeline_res.get("pp_glucose_ocr_note"),
                     "pipeline_version": "metabolic_v1_ada_who",
                     "pipeline_status": pipeline_res.get("pipeline_status", "APPROVED")
                 },
@@ -728,6 +803,7 @@ def process_medical_report(file_bytes: bytes, filename: str) -> Dict[str, Any]:
                     "age": verified.get("age") or m["age"],
                     "gender": verified.get("sex") or m["gender"],
                     "glucose": f_glu,
+                    "post_prandial_glucose": pp_glu,
                     "hba1c": hba1c_val,
                     "bmi": bmi_num,
                 },
@@ -747,6 +823,7 @@ def process_medical_report(file_bytes: bytes, filename: str) -> Dict[str, Any]:
                 "audit_passed": audit_res.get("audit_passed", True)
             }
         else:
+            status = pipeline_res.get("pipeline_status", "HARD_STOP_PRE_GENERATION")
             err_msg = pipeline_res.get("error") or "Could not extract diabetes or obesity-relevant values from this report. Please upload a report with glucose/HbA1c results or height & weight / BMI."
             return {
                 "filename": filename,
@@ -755,7 +832,7 @@ def process_medical_report(file_bytes: bytes, filename: str) -> Dict[str, Any]:
                 "extracted_metrics": {
                     "report_type": "Metabolic Panel (Diabetes & Obesity)",
                     "error": err_msg,
-                    "pipeline_status": pipeline_res.get("pipeline_status", "HARD_STOP_PRE_GENERATION")
+                    "pipeline_status": status
                 },
                 "clinical_flags": {},
                 "extraction_confidence": 0.0,

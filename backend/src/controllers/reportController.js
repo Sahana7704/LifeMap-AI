@@ -14,6 +14,21 @@ async function uploadReport(req, res) {
     // Call FastAPI microservice OCR pipeline
     const ocrResult = await fastapiClient.extractReport(buffer, originalname, mimetype);
 
+    // Bug R: Pre-extraction document-type validation check (reject population/research tables)
+    if (ocrResult.pipeline_status === 'REJECTED_NON_PATIENT_DOCUMENT') {
+      const errMsg = ocrResult.error || ocrResult.summary || 'This appears to be a research or statistical summary table, not an individual lab report. Please upload your own personal diagnostic report.';
+      return res.status(422).json({
+        error: errMsg,
+        message: errMsg,
+        pipeline_status: 'REJECTED_NON_PATIENT_DOCUMENT',
+        audit_passed: false,
+        predictions: null,
+        vitality_score: null,
+        risk_score: null,
+        filename: originalname
+      });
+    }
+
     // Hard-stop pre-generation gate triggered (e.g. LFT or zero-relevant fields)
     if (ocrResult.pipeline_status === 'HARD_STOP_PRE_GENERATION' || ocrResult.hard_stop_triggered) {
       const errMsg = ocrResult.summary || ocrResult.error || 'Could not extract diabetes or obesity-relevant values from this report. Please upload a report with glucose/HbA1c results or height & weight / BMI.';
@@ -560,10 +575,11 @@ async function uploadReport(req, res) {
     console.error('Report upload & OCR error:', err.response?.data || err.message, err.stack);
     if (err.response?.status === 422) {
       const detail = err.response?.data?.detail || err.response?.data?.error || 'Could not extract diabetes or obesity-relevant values from this report.';
+      const isRejection = typeof detail === 'string' && (detail.includes('statistical summary') || detail.includes('research'));
       return res.status(422).json({
         error: detail,
         message: detail,
-        pipeline_status: 'HARD_STOP_PRE_GENERATION',
+        pipeline_status: isRejection ? 'REJECTED_NON_PATIENT_DOCUMENT' : 'HARD_STOP_PRE_GENERATION',
         predictions: null,
         vitality_score: null,
         risk_score: null
@@ -616,6 +632,15 @@ async function uploadMetabolicReport(req, res) {
     // Call FastAPI metabolic microservice pipeline
     const ocrResult = await fastapiClient.extractMetabolicReport(buffer, originalname, mimetype);
 
+    // Bug R: Pre-extraction document-type validation check (reject population/research tables)
+    if (ocrResult.pipeline_status === 'REJECTED_NON_PATIENT_DOCUMENT') {
+      return res.status(422).json({
+        error: ocrResult.error || 'This appears to be a research or statistical summary table, not an individual lab report. Please upload your own personal diagnostic report.',
+        pipeline_status: 'REJECTED_NON_PATIENT_DOCUMENT',
+        details: 'Research and population statistical tables are not individual patient diagnostic reports.'
+      });
+    }
+
     // Hard stop if Step 2 pre-generation gate halted
     if (!ocrResult.success || ocrResult.pipeline_status === 'HARD_STOP_PRE_GENERATION') {
       return res.status(422).json({
@@ -644,6 +669,7 @@ async function uploadMetabolicReport(req, res) {
     const enrichedMetrics = {
       report_type: 'Metabolic Panel (Diabetes & Obesity)',
       fasting_glucose: verifiedVitals.fasting_glucose?.value ?? null,
+      post_prandial_glucose: verifiedVitals.post_prandial_glucose?.value ?? null,
       hba1c: verifiedVitals.hba1c?.value ?? null,
       random_glucose: verifiedVitals.random_glucose?.value ?? null,
       bmi: verifiedVitals.bmi?.value ?? null,
@@ -927,7 +953,16 @@ async function uploadMetabolicReport(req, res) {
     });
 
   } catch (err) {
-    console.error('Metabolic upload error:', err);
+    console.error('Metabolic upload error:', err.response?.data || err.message);
+    if (err.response?.status === 422) {
+      const detail = err.response?.data?.detail || err.response?.data?.error || 'Could not extract diabetes or obesity-relevant values from this report.';
+      const isRejection = typeof detail === 'string' && (detail.includes('statistical summary') || detail.includes('research'));
+      return res.status(422).json({
+        error: detail,
+        message: detail,
+        pipeline_status: isRejection ? 'REJECTED_NON_PATIENT_DOCUMENT' : 'HARD_STOP_PRE_GENERATION'
+      });
+    }
     return res.status(500).json({ error: 'Failed to process metabolic report', details: err.message });
   }
 }

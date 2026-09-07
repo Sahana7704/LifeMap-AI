@@ -17,6 +17,62 @@ from typing import Dict, Any, List, Optional, Tuple
 logger = logging.getLogger("lifemap_metabolic")
 
 # =====================================================================
+# =====================================================================
+# PRE-EXTRACTION DOCUMENT CLASSIFICATION GATE (BUG R: POPULATION TABLES)
+# =====================================================================
+
+def validate_document_type(raw_ocr_text: str) -> Tuple[bool, List[str]]:
+    """
+    Bug R Gate: Before diagnostic extraction, scan the document for structural
+    signals that indicate it is a population/research statistical summary table,
+    cohort comparison, or meta-analysis — containing NO individual patient.
+
+    Signals:
+    1. "N=" or "n=" followed by a number (sample size notation)
+    2. Column headers indicating group comparison ("Yes/No", "Group A/ Group B", "History of X", "Patients With", etc.)
+    3. P-values (e.g. "P Value", ".001", "<.001", "p <", "p =")
+    4. Mean/SD notation format (e.g. "177.5 (62.7)", "mean (sd)", "mean ± sd", "±")
+    5. Multiple percentage columns comparing cohorts (e.g. "No. (%)", "n (%)")
+
+    If 2+ of these signals are detected, returns (False, detected_signals).
+    """
+    if not raw_ocr_text:
+        return True, []
+
+    text_norm = unicodedata.normalize('NFKC', raw_ocr_text)
+    signals = []
+
+    # 1. Sample size notation: N= or n= followed by a number
+    if re.search(r'\b[Nn]\s*=\s*[0-9]+', text_norm):
+        signals.append("Sample size notation (N= or n=)")
+
+    # 2. Group/cohort comparison headers
+    cohort_patterns = [
+        r'\b(?:group\s+[a-z0-9]|cohort|patients\s+with|history\s+of|total\s+sample)\b',
+        r'\b(?:yes|no)\s*\(\s*n\s*=',
+        r'\b(?:cases|controls)\s+vs\b',
+        r'\bwith\s+and\s+without\b',
+        r'\boutcome\s*measure\b'
+    ]
+    if any(re.search(pat, text_norm, re.IGNORECASE) for pat in cohort_patterns):
+        signals.append("Group/cohort comparison headers")
+
+    # 3. P-values (e.g. P Value, .001, <.001, p <)
+    if re.search(r'\b(?:p\s*[-–—]?\s*value|\bp\s*[<>=]\s*\.?[0-9]+|<\s*\.?001|\bp\s*<\s*0\b|\b\.[0-9]{3}\b)', text_norm, re.IGNORECASE):
+        signals.append("P-values / statistical significance")
+
+    # 4. Mean (SD) format: e.g. "177.5 (62.7)", "60.2 (17.6)", "mean ± sd"
+    if re.search(r'\b[0-9]+(?:\.[0-9]+)?\s*\(\s*[0-9]+(?:\.[0-9]+)?\s*\)', text_norm) or re.search(r'±\s*[0-9]+|\bmean\s*\(?sd\)?|\bmean\s*±\s*sd\b', text_norm, re.IGNORECASE):
+        signals.append("Mean/SD statistical notation")
+
+    # 5. Cohort percentage columns: e.g. "No. (%)", "n (%)", "% (n=)"
+    if re.search(r'(?:no\.?\s*\(\s*%\s*\)|n\s*\(\s*%\s*\)|%\s*\(n\s*=\s*[0-9]+\))', text_norm, re.IGNORECASE):
+        signals.append("Cohort percentage columns")
+
+    is_research_table = len(signals) >= 2
+    return not is_research_table, signals
+
+# =====================================================================
 # SYSTEM PROMPTS (Verbatim as specified in user specification)
 # =====================================================================
 
@@ -27,7 +83,7 @@ METABOLIC_STEP1_SYSTEM_PROMPT = (
     "calculate BMI from height+weight unless BMI itself is explicitly printed "
     "in the source — extraction never calculates, only reads).\n\n"
     "Rules:\n"
-    "1. Extract ONLY: Fasting Blood Glucose, HbA1c, Random Blood Glucose, "
+    "1. Extract ONLY: Fasting Blood Glucose, Post-Prandial Glucose, HbA1c, Random Blood Glucose, "
     "   Height, Weight, BMI, Waist Circumference, Age, Sex — and ONLY if each "
     "   is explicitly printed in the source.\n"
     "2. For each field: value, unit, reference_range (as printed), "
@@ -39,6 +95,7 @@ METABOLIC_STEP1_SYSTEM_PROMPT = (
     "Schema:\n"
     "{\n"
     '  "fasting_glucose": {"value": number|null, "unit": str, "reference_range": str, "source_flagged": bool},\n'
+    '  "post_prandial_glucose": {"value": number|null, "unit": str, "reference_range": str, "source_flagged": bool},\n'
     '  "hba1c": {"value": number|null, "unit": str, "reference_range": str, "source_flagged": bool},\n'
     '  "random_glucose": {"value": number|null, "unit": str, "reference_range": str, "source_flagged": bool},\n'
     '  "height_cm": number|null,\n'
@@ -59,6 +116,10 @@ METABOLIC_STEP3_SYSTEM_PROMPT = (
     "- Fasting Glucose >=126 mg/dL -> 'Diagnostic range for diabetes'\n"
     "- Fasting Glucose 100–125 -> 'Prediabetes range'\n"
     "- Fasting Glucose <100 -> 'Normal range'\n"
+    "- Post-Prandial Glucose >=200 mg/dL -> 'Diagnostic range for diabetes'\n"
+    "- Post-Prandial Glucose 140–199 -> 'Prediabetes range'\n"
+    "- Post-Prandial Glucose <70 or below reference range -> 'Low / Below Reference Range (Reactive Hypoglycemia pattern)'\n"
+    "- Post-Prandial Glucose 70–139 -> 'Normal range'\n"
     "- HbA1c >=6.5% -> 'Diagnostic range for diabetes'\n"
     "- HbA1c 5.7–6.4% -> 'Prediabetes range'\n"
     "- HbA1c <5.7% -> 'Normal range'\n"
@@ -164,17 +225,28 @@ def extract_field_robust(
     min_val: float,
     max_val: float,
     unit_pattern: Optional[str] = None,
-    allow_mmol: bool = False
-) -> Tuple[Optional[float], Optional[int], Optional[int], Optional[str]]:
+    allow_mmol: bool = False,
+    exclude_headers: Optional[List[str]] = None
+) -> Tuple[Optional[float], Optional[int], Optional[int], Optional[str], Optional[str]]:
     """
     Robust multi-section extractor:
     Scans entire document text for each test header independently.
     Handles intervening lines such as 'Method: HPLC', 'Sample: Serum', etc.
     Avoids capturing reference intervals (< 5.7, 70-100) or subsequent test sections.
-    Returns (extracted_value, start_idx, end_idx, unit_detected).
+    Masks reference intervals so reference boundaries are never misidentified as patient results.
+    Returns (extracted_value, start_idx, end_idx, unit_detected, ref_range_str).
     """
     combined_header = r'(?:' + '|'.join(header_patterns) + r')\b'
     for m in re.finditer(combined_header, text, re.I):
+        line_start = text.rfind('\n', 0, m.start()) + 1
+        line_end = text.find('\n', m.end())
+        if line_end == -1:
+            line_end = len(text)
+        current_line = text[line_start:line_end]
+
+        if exclude_headers and any(re.search(ex, current_line, re.I) for ex in exclude_headers):
+            continue
+
         start_pos = m.end()
         snippet = text[start_pos:start_pos + 450]
         m_stop = re.search(r'(?:biological\s+reference|reference\s+interval|reference\s+range|ref\.\s*range|ref\s*interval|biological\s*ref)', snippet, re.I)
@@ -183,35 +255,55 @@ def extract_field_robust(
         # Check for mmol/L unit context in search_window
         window_has_mmol = bool(re.search(r'\bmmol\s*[\/\.]\s*[lL]\b', search_window, re.I))
 
+        # Identify any printed reference intervals in search_window (e.g. 4.0 - 6.0, 70-99, 90 - 120, < 5.7, > 140)
+        ref_intervals = []
+        raw_ref_str = None
+        for r_m in re.finditer(r'(?:([0-9]{1,3}(?:\.[0-9]+)?)\s*(?:[-–—~]|to)\s*([0-9]{1,3}(?:\.[0-9]+)?)|([<>≤≥])\s*([0-9]{1,3}(?:\.[0-9]+)?))', search_window):
+            if r_m.group(1) and r_m.group(2):
+                ref_intervals.append((float(r_m.group(1)), float(r_m.group(2)), r_m.start(), r_m.end()))
+                if not raw_ref_str:
+                    raw_ref_str = r_m.group(0).strip()
+            elif r_m.group(4):
+                ref_intervals.append((None, float(r_m.group(4)), r_m.start(), r_m.end()))
+                if not raw_ref_str:
+                    raw_ref_str = r_m.group(0).strip()
+
+        # Mask reference intervals to create a clean search surface where range boundaries cannot be picked
+        masked_window = list(search_window)
+        for _, _, s_idx, e_idx in ref_intervals:
+            for i in range(s_idx, e_idx):
+                masked_window[i] = ' '
+        masked_search_window = "".join(masked_window)
+
         # Priority 1: Explicit 'Result: X' or 'Value: X'
-        m_res = re.search(r'(?:result|value|observed|reading|level)[\s:\-|=]*([0-9]{1,3}(?:\.[0-9]+)?)', search_window, re.I)
+        m_res = re.search(r'(?:result|value|observed|reading|level)[\s:\-|=]*([0-9]{1,3}(?:\.[0-9]+)?)', masked_search_window, re.I)
         if m_res:
             try:
                 val = float(m_res.group(1))
                 if min_val <= val <= max_val:
-                    return val, m.start(), start_pos + m_res.end(), "mg/dL" if not window_has_mmol else "mmol/L"
+                    return val, m.start(), start_pos + m_res.end(), "mg/dL" if not window_has_mmol else "mmol/L", raw_ref_str
                 if allow_mmol and window_has_mmol and 2.0 <= val <= 35.0:
-                    return val, m.start(), start_pos + m_res.end(), "mmol/L"
+                    return val, m.start(), start_pos + m_res.end(), "mmol/L", raw_ref_str
             except ValueError:
                 pass
 
         # Priority 2: Number followed by matching unit (or flag then unit, like 118 H mg/dL)
         if unit_pattern:
-            m_unit = re.search(r'([0-9]{1,3}(?:\.[0-9]+)?)\s*(?:[A-Za-z]\s+)?(' + unit_pattern + r')', search_window, re.I)
+            m_unit = re.search(r'([0-9]{1,3}(?:\.[0-9]+)?)\s*(?:[A-Za-z]\s+)?(' + unit_pattern + r')', masked_search_window, re.I)
             if m_unit:
                 try:
                     val = float(m_unit.group(1))
                     unit_str = m_unit.group(2)
                     is_mmol = "mmol" in unit_str.lower()
                     if min_val <= val <= max_val:
-                        return val, m.start(), start_pos + m_unit.end(), "mmol/L" if is_mmol else "mg/dL"
+                        return val, m.start(), start_pos + m_unit.end(), "mmol/L" if is_mmol else "mg/dL", raw_ref_str
                     if allow_mmol and is_mmol and 2.0 <= val <= 35.0:
-                        return val, m.start(), start_pos + m_unit.end(), "mmol/L"
+                        return val, m.start(), start_pos + m_unit.end(), "mmol/L", raw_ref_str
                 except ValueError:
                     pass
 
-        # Priority 3: Standalone number in lines that do not describe methods/instruments
-        lines = search_window.split('\n')
+        # Priority 3: Standalone number on lines that do not describe methods/instruments
+        lines = masked_search_window.split('\n')
         cleaned_lines = []
         for line in lines[:3]:
             if re.match(r'^\s*(?:method|specimen|sample|instrument|analyzer|technology)\s*:', line, re.I):
@@ -223,23 +315,30 @@ def extract_field_robust(
 
         for m_num in re.finditer(r'(?:([<>=]+)\s*)?([0-9]{1,3}(?:\.[0-9]+)?)\b', filtered_window):
             if m_num.group(1):
-                # Preceded by comparison operators like <, >, <=, >= (reference thresholds)
                 continue
             try:
                 val = float(m_num.group(2))
+                # Validation check: confirm not accidentally matching a range boundary if an alternative exists
+                boundary_match = any((val == low or val == high) for low, high, _, _ in ref_intervals if low is not None and high is not None)
+                if boundary_match:
+                    all_nums = [float(x) for x in re.findall(r'\b([0-9]{1,3}(?:\.[0-9]+)?)\b', filtered_window)]
+                    alternatives = [n for n in all_nums if not any(n == low or n == high for low, high, _, _ in ref_intervals if low is not None and high is not None)]
+                    if alternatives:
+                        val = alternatives[0]
+
                 if min_val <= val <= max_val:
-                    return val, m.start(), start_pos + len(search_window), "mmol/L" if window_has_mmol else "mg/dL"
+                    return val, m.start(), start_pos + len(search_window), "mmol/L" if window_has_mmol else "mg/dL", raw_ref_str
                 if allow_mmol and window_has_mmol and 2.0 <= val <= 35.0:
-                    return val, m.start(), start_pos + len(search_window), "mmol/L"
+                    return val, m.start(), start_pos + len(search_window), "mmol/L", raw_ref_str
             except ValueError:
                 pass
 
-    return None, None, None, None
+    return None, None, None, None, None
 
 def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
     """
-    Extract ONLY explicitly printed values: Fasting Glucose, HbA1c, Random Glucose,
-    Height, Weight, BMI (only if printed), Waist Circumference, Age, Sex.
+    Extract ONLY explicitly printed values: Fasting Glucose, Post-Prandial Glucose,
+    HbA1c, Random Glucose, Height, Weight, BMI (only if printed), Waist Circumference, Age, Sex.
     Never calculates BMI from height+weight in this step.
     Scans entire document text independently for all target fields across multi-section formats.
     """
@@ -258,25 +357,32 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
 
     # Fasting Glucose (Scans independently across document, wrapped in try/except for Bug K)
     fasting_glucose = None
+    fasting_glucose_ocr_note = None
     try:
-        fg_val, fg_start, fg_end, fg_unit = extract_field_robust(
+        fg_val, fg_start, fg_end, fg_unit, fg_ref = extract_field_robust(
             normalized_text,
-            [r'fasting\s*(?:plasma\s*|blood\s*)?(?:glucose|sugar)', r'fbs\b', r'fbg\b', r'glucose\s*\(?fasting\)?', r'blood\s*sugar\s*\(?fasting\)?'],
+            [r'fasting\s*(?:plasma\s*|blood\s*)?(?:glucose|sugar)', r'\bfbs\b', r'\bfbg\b', r'glucose\s*\(?fasting\)?', r'blood\s*sugar\s*\(?fasting\)?'],
             40.0, 500.0,
             unit_pattern=r'(?:mg\s*[\/\.]\s*d[lL]|mmol\s*[\/\.]\s*[lL])',
-            allow_mmol=True
+            allow_mmol=True,
+            exclude_headers=[r'estimated\s+avg(?:erage)?\s+glucose', r'\beag\b', r'mean\s+(?:blood\s+)?glucose', r'post\s*prandial', r'\bppbs\b', r'\bppbg\b']
         )
         if fg_val is None:
             # Fallback to generic glucose if not marked as random or post-prandial
-            if not re.search(r'\b(?:random|post\s*prandial|ppbs|rbs)\b', normalized_text, re.I):
-                cleaned_text = re.sub(r'estimated\s+avg(?:erage)?\s+glucose.*?(?=\n\n|\Z)', '', normalized_text, flags=re.I | re.S)
-                cleaned_text = re.sub(r'glucose\s*\(?eag\)?.*?(?=\n\n|\Z)', '', cleaned_text, flags=re.I | re.S)
-                fg_val, fg_start, fg_end, fg_unit = extract_field_robust(
+            # Strictly filter out lines containing 'estimated average glucose', 'eag', 'mean blood glucose', or post prandial
+            if not re.search(r'\b(?:random|post\s*prandial|ppbs|ppbg|rbs)\b', normalized_text, re.I):
+                cleaned_lines = [
+                    line for line in normalized_text.split('\n')
+                    if not re.search(r'\b(?:estimated|eag|post\s*prandial|ppbs|ppbg|random|rbs)\b', line, re.I)
+                ]
+                cleaned_text = '\n'.join(cleaned_lines)
+                fg_val, fg_start, fg_end, fg_unit, fg_ref = extract_field_robust(
                     cleaned_text,
                     [r'blood\s*(?:glucose|sugar)', r'\bglucose\b'],
                     40.0, 500.0,
                     unit_pattern=r'(?:mg\s*[\/\.]\s*d[lL]|mmol\s*[\/\.]\s*[lL])',
-                    allow_mmol=True
+                    allow_mmol=True,
+                    exclude_headers=[r'estimated\s+avg(?:erage)?\s+glucose', r'\beag\b', r'mean\s+(?:blood\s+)?glucose']
                 )
         if fg_val is not None:
             if fg_unit == "mmol/L":
@@ -287,7 +393,7 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
                     "unit": "mg/dL",
                     "original_value": fg_val,
                     "original_unit": "mmol/L",
-                    "reference_range": "3.9 - 5.5 mmol/L (70 - 99 mg/dL)",
+                    "reference_range": fg_ref or "3.9 - 5.5 mmol/L (70 - 99 mg/dL)",
                     "source_flagged": flagged
                 }
             else:
@@ -295,17 +401,76 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
                 fasting_glucose = {
                     "value": fg_val,
                     "unit": "mg/dL",
-                    "reference_range": "70 - 99 mg/dL",
+                    "reference_range": fg_ref or "70 - 99 mg/dL",
                     "source_flagged": flagged
                 }
+        else:
+            if re.search(r'\b(?:fasting\s*(?:plasma\s*|blood\s*)?(?:glucose|sugar)|fbs\b|fbg\b)\b', normalized_text, re.I):
+                fasting_glucose_ocr_note = "Field detected in report text, but value could not be extracted clearly. Please re-scan or enter manually."
     except Exception as e:
         logger.exception(f"[Step 1 Extraction] Failed extracting fasting_glucose: {e}")
+
+    # Post-Prandial (PP) Glucose (2-hour post-meal, Bug Q)
+    post_prandial_glucose = None
+    pp_glucose_ocr_note = None
+    try:
+        pp_val, pp_start, pp_end, pp_unit, pp_ref = extract_field_robust(
+            normalized_text,
+            [
+                r'post\s*prandial\s*(?:plasma\s*|blood\s*)?(?:glucose|sugar)',
+                r'\bppbs\b',
+                r'\bppbg\b',
+                r'glucose\s*\(?pp\)?',
+                r'blood\s*sugar\s*\(?pp\)?',
+                r'2\s*[-–—]?\s*h(?:ou)?r\s*post\s*(?:meal|glucose)',
+                r'post\s*meal\s*(?:blood\s*)?glucose'
+            ],
+            30.0, 500.0,
+            unit_pattern=r'(?:mg\s*[\/\.]\s*d[lL]|mmol\s*[\/\.]\s*[lL])',
+            allow_mmol=True,
+            exclude_headers=[r'fasting', r'\bfbs\b', r'\bfbg\b', r'estimated\s+avg(?:erage)?\s+glucose', r'\beag\b']
+        )
+        if pp_val is not None:
+            low_thresh = 70.0
+            high_thresh = 140.0
+            if pp_ref:
+                m_r = re.search(r'([0-9]{2,3}(?:\.[0-9]+)?)\s*[-–—~]\s*([0-9]{2,3}(?:\.[0-9]+)?)', pp_ref)
+                if m_r:
+                    low_thresh = float(m_r.group(1))
+                    high_thresh = float(m_r.group(2))
+            
+            if pp_unit == "mmol/L":
+                converted_val = round(pp_val * 18.0182, 1)
+                flagged = (pp_val >= 7.8 or pp_val < 3.9)
+                post_prandial_glucose = {
+                    "value": converted_val,
+                    "unit": "mg/dL",
+                    "original_value": pp_val,
+                    "original_unit": "mmol/L",
+                    "reference_range": pp_ref or "< 140 mg/dL (< 7.8 mmol/L)",
+                    "source_flagged": flagged,
+                    "low_threshold": round(low_thresh * 18.0182, 1) if pp_ref else 70.0
+                }
+            else:
+                flagged = (pp_val >= high_thresh or pp_val < low_thresh)
+                post_prandial_glucose = {
+                    "value": pp_val,
+                    "unit": "mg/dL",
+                    "reference_range": pp_ref or "< 140 mg/dL (ADA Standard)",
+                    "source_flagged": flagged,
+                    "low_threshold": low_thresh
+                }
+        else:
+            if re.search(r'\b(?:post\s*prandial|ppbs|ppbg|2\s*hr\s*post\s*meal)\b', normalized_text, re.I):
+                pp_glucose_ocr_note = "Post-Prandial Glucose detected in report text, but value could not be extracted clearly. Please re-scan or enter manually."
+    except Exception as e:
+        logger.exception(f"[Step 1 Extraction] Failed extracting post_prandial_glucose: {e}")
 
     # HbA1c (Scans independently across document, wrapped in try/except for Bug K)
     hba1c = None
     hba1c_ocr_note = None
     try:
-        hba1c_val, h_start, h_end, _ = extract_field_robust(
+        hba1c_val, h_start, h_end, _, h_ref = extract_field_robust(
             normalized_text,
             [r'hba1c', r'hb\s*[-–]?\s*a1c', r'a1c', r'(?:glycated|glycosylated)\s*(?:ha?emoglobin|hb)'],
             3.5, 20.0,
@@ -316,7 +481,7 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
             hba1c = {
                 "value": hba1c_val,
                 "unit": "%",
-                "reference_range": "< 5.7%",
+                "reference_range": h_ref or "< 5.7%",
                 "source_flagged": flagged
             }
         else:
@@ -329,12 +494,13 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
     # Random Glucose (Scans independently across document, wrapped in try/except for Bug K)
     random_glucose = None
     try:
-        rg_val, rg_start, rg_end, rg_unit = extract_field_robust(
+        rg_val, rg_start, rg_end, rg_unit, rg_ref = extract_field_robust(
             normalized_text,
-            [r'random\s*(?:blood\s*)?(?:glucose|sugar)', r'post\s*prandial\s*(?:blood\s*)?(?:glucose|sugar)', r'ppbs', r'rbs', r'glucose\s*\(?pp\)?'],
+            [r'random\s*(?:blood\s*)?(?:glucose|sugar)', r'\brbs\b', r'glucose\s*\(?random\)?'],
             40.0, 500.0,
             unit_pattern=r'(?:mg\s*[\/\.]\s*d[lL]|mmol\s*[\/\.]\s*[lL])',
-            allow_mmol=True
+            allow_mmol=True,
+            exclude_headers=[r'fasting', r'post\s*prandial', r'\bppbs\b', r'\bppbg\b', r'estimated\s+avg(?:erage)?\s+glucose', r'\beag\b']
         )
         if rg_val is not None:
             if rg_unit == "mmol/L":
@@ -345,7 +511,7 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
                     "unit": "mg/dL",
                     "original_value": rg_val,
                     "original_unit": "mmol/L",
-                    "reference_range": "70 - 139 mg/dL",
+                    "reference_range": rg_ref or "70 - 139 mg/dL",
                     "source_flagged": flagged
                 }
             else:
@@ -353,7 +519,7 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
                 random_glucose = {
                     "value": rg_val,
                     "unit": "mg/dL",
-                    "reference_range": "70 - 139 mg/dL",
+                    "reference_range": rg_ref or "70 - 139 mg/dL",
                     "source_flagged": flagged
                 }
     except Exception as e:
@@ -372,14 +538,14 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
             elif 100.0 <= val <= 230.0:
                 height_cm = val
         if height_cm is None:
-            ht_val, _, _, _ = extract_field_robust(
+            ht_val, _, _, _, _ = extract_field_robust(
                 normalized_text,
                 [r'\bheight\b', r'\bht\b'],
                 100.0, 230.0,
                 unit_pattern=r'(?:cm|cms)\b'
             )
             if ht_val is None:
-                ht_m, _, _, _ = extract_field_robust(
+                ht_m, _, _, _, _ = extract_field_robust(
                     normalized_text,
                     [r'\bheight\b', r'\bht\b'],
                     1.2, 2.3,
@@ -395,7 +561,7 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
     # Weight (kg) (Scans independently across document, wrapped in try/except for Bug K)
     weight_kg = None
     try:
-        wt_val, _, _, _ = extract_field_robust(
+        wt_val, _, _, _, _ = extract_field_robust(
             normalized_text,
             [r'\bweight\b', r'\bwt\b'],
             30.0, 250.0,
@@ -409,7 +575,7 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
     # BMI (ONLY if explicitly printed in source, never calculated here in Step 1, wrapped in try/except for Bug K)
     bmi = None
     try:
-        bmi_val, bmi_start, bmi_end, _ = extract_field_robust(
+        bmi_val, bmi_start, bmi_end, _, _ = extract_field_robust(
             normalized_text,
             [r'body\s*mass\s*index', r'\bbmi\b'],
             12.0, 65.0,
@@ -445,7 +611,7 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
     # Waist Circumference (cm) (Scans independently across document, wrapped in try/except for Bug K)
     waist_circumference_cm = None
     try:
-        wc_val, _, _, _ = extract_field_robust(
+        wc_val, _, _, _, _ = extract_field_robust(
             normalized_text,
             [r'waist(?:\s*circumference)?', r'\bwc\b'],
             45.0, 180.0,
@@ -510,11 +676,21 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
         logger.exception(f"[Step 1 Extraction] Failed extracting sex: {e}")
 
     # Confidence assessment
-    has_primary = (fasting_glucose is not None) or (hba1c is not None) or (random_glucose is not None) or (bmi.get("value") is not None) or (height_cm is not None and weight_kg is not None)
+    has_primary = (
+        (fasting_glucose is not None) or
+        (post_prandial_glucose is not None) or
+        (hba1c is not None) or
+        (random_glucose is not None) or
+        (bmi.get("value") is not None) or
+        (height_cm is not None and weight_kg is not None)
+    )
     confidence = "high" if has_primary else "low"
 
     return {
         "fasting_glucose": fasting_glucose,
+        "fasting_glucose_ocr_note": fasting_glucose_ocr_note,
+        "post_prandial_glucose": post_prandial_glucose,
+        "pp_glucose_ocr_note": pp_glucose_ocr_note,
         "hba1c": hba1c,
         "hba1c_ocr_note": hba1c_ocr_note,
         "random_glucose": random_glucose,
@@ -538,7 +714,7 @@ def step2_metabolic_pre_generation_gate(
 ) -> Tuple[bool, Optional[str], Dict[str, Any]]:
     """
     Step 2 Hard Pre-generation Gate (Code only):
-    1. If fasting_glucose, hba1c, random_glucose, AND bmi are ALL null AND cannot compute BMI -> STOP.
+    1. If fasting_glucose, post_prandial_glucose, hba1c, random_glucose, AND bmi are ALL null AND cannot compute BMI -> STOP.
     2. If extraction_confidence == 'low' -> STOP.
     3. BMI CALCULATION: In code ONLY, if bmi.value is null but height_cm and weight_kg are non-null:
        compute BMI = weight_kg / (height_m)^2, tag 'source: calculated'.
@@ -547,6 +723,7 @@ def step2_metabolic_pre_generation_gate(
     """
     normalized_ocr = unicodedata.normalize('NFKC', raw_ocr_text).replace('：', ':').replace('，', ',')
     fg = extracted_json.get("fasting_glucose")
+    pp = extracted_json.get("post_prandial_glucose")
     hba1c = extracted_json.get("hba1c")
     rg = extracted_json.get("random_glucose")
     bmi = extracted_json.get("bmi") or {"value": None, "source": "not_present"}
@@ -572,6 +749,7 @@ def step2_metabolic_pre_generation_gate(
     # Hard Stop Check 1: Are all diabetes and obesity indicators null?
     has_any_indicator = (
         (fg is not None and fg.get("value") is not None) or
+        (pp is not None and pp.get("value") is not None) or
         (hba1c is not None and hba1c.get("value") is not None) or
         (rg is not None and rg.get("value") is not None) or
         (bmi is not None and bmi.get("value") is not None)
@@ -588,6 +766,9 @@ def step2_metabolic_pre_generation_gate(
     # String-match verification of extracted values against raw OCR text
     verified_json = {
         "fasting_glucose": None,
+        "fasting_glucose_ocr_note": extracted_json.get("fasting_glucose_ocr_note"),
+        "post_prandial_glucose": None,
+        "pp_glucose_ocr_note": extracted_json.get("pp_glucose_ocr_note"),
         "hba1c": None,
         "hba1c_ocr_note": extracted_json.get("hba1c_ocr_note"),
         "random_glucose": None,
@@ -612,6 +793,19 @@ def step2_metabolic_pre_generation_gate(
                 verified_json["required_flagged_checklist"].append("Fasting Blood Glucose")
         else:
             logger.warning(f"[Step 2 Verification] Fasting glucose {v_str} failed OCR string match, dropped.")
+
+    # Verify Post-Prandial Glucose (Bug Q)
+    if pp and pp.get("value") is not None:
+        val = pp["value"]
+        orig = pp.get("original_value")
+        v_str = str(int(val)) if val == int(val) else str(val)
+        orig_str = str(orig) if orig is not None else None
+        if re.search(rf'\b{re.escape(v_str)}\b', normalized_ocr) or (orig_str and (orig_str in normalized_ocr or re.search(rf'\b{re.escape(orig_str)}\b', normalized_ocr))):
+            verified_json["post_prandial_glucose"] = pp
+            if pp.get("source_flagged"):
+                verified_json["required_flagged_checklist"].append("Post-Prandial Blood Glucose")
+        else:
+            logger.warning(f"[Step 2 Verification] Post-prandial glucose {v_str} failed OCR string match, dropped.")
 
     # Verify HbA1c
     if hba1c and hba1c.get("value") is not None:
@@ -665,7 +859,6 @@ def step2_metabolic_pre_generation_gate(
             logger.warning(f"[Step 2 Verification] Printed BMI {bmi_str} not verified in OCR, dropped.")
             verified_json["bmi"] = {"value": None, "source": "not_present"}
     elif bmi and bmi.get("source") == "calculated" and bmi.get("value") is not None:
-        # Code-calculated BMI is valid
         verified_json["bmi"] = bmi
         if bmi.get("source_flagged"):
             verified_json["required_flagged_checklist"].append("BMI")
@@ -684,6 +877,7 @@ def step2_metabolic_pre_generation_gate(
     # Final sanity check: do we have at least one verified indicator?
     has_verified = (
         (verified_json["fasting_glucose"] is not None) or
+        (verified_json["post_prandial_glucose"] is not None) or
         (verified_json["hba1c"] is not None) or
         (verified_json["random_glucose"] is not None) or
         (verified_json["bmi"].get("value") is not None)
@@ -710,10 +904,14 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
       * Fasting Glucose >=126 mg/dL -> 'Diagnostic range for diabetes'
       * Fasting Glucose 100-125 -> 'Prediabetes range'
       * Fasting Glucose <100 -> 'Normal range'
+      * Post-Prandial Glucose >=200 mg/dL -> 'Diagnostic range for diabetes'
+      * Post-Prandial Glucose 140-199 -> 'Prediabetes range'
+      * Post-Prandial Glucose <70 or below printed ref -> 'Low / Below Reference Range (Reactive Hypoglycemia pattern)'
+      * Post-Prandial Glucose 70-139 -> 'Normal range'
       * HbA1c >=6.5% -> 'Diagnostic range for diabetes'
       * HbA1c 5.7-6.4% -> 'Prediabetes range'
       * HbA1c <5.7% -> 'Normal range'
-      * If glucose and HbA1c disagree, report both separately — never average.
+      * If glucose and HbA1c disagree, report each separately — never average.
     - OBESITY classification (WHO Asian-adjusted cutoffs):
       * BMI <18.5 -> Underweight
       * BMI 18.5-22.9 -> Normal
@@ -731,6 +929,7 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
     if llm_result and isinstance(llm_result, dict) and "diabetes_assessment" in llm_result:
         verified_fields_chk = [
             verified_json.get("fasting_glucose"),
+            verified_json.get("post_prandial_glucose"),
             verified_json.get("hba1c"),
             verified_json.get("random_glucose"),
             verified_json.get("bmi", {}).get("value") if isinstance(verified_json.get("bmi"), dict) else verified_json.get("bmi"),
@@ -747,6 +946,7 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
 
     # High-precision deterministic clinical reasoning engine implementing Step 3 rules
     fg = verified_json.get("fasting_glucose")
+    pp = verified_json.get("post_prandial_glucose")
     hba1c = verified_json.get("hba1c")
     rg = verified_json.get("random_glucose")
     bmi = verified_json.get("bmi") or {}
@@ -754,9 +954,10 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
     sex = verified_json.get("sex") or "Male"
     is_male = "m" in sex.lower() and "fe" not in sex.lower()
 
-    # Count total available indicators across both metabolic and anthropometric fields verified in Step 2 (Fix Bug C)
+    # Count total available indicators across both metabolic and anthropometric fields verified in Step 2
     verified_fields = [
         fg.get("value") if fg else None,
+        pp.get("value") if pp else None,
         hba1c.get("value") if hba1c else None,
         rg.get("value") if rg else None,
         bmi.get("value") if bmi else None,
@@ -769,8 +970,8 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
 
     # 1. DIABETES CLASSIFICATION (ADA Criteria)
     diabetes_classifications = []
-    diabetes_summary = ""
     glucose_status = None
+    pp_status = None
     hba1c_status = None
 
     if fg and fg.get("value") is not None:
@@ -789,6 +990,25 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
             "source_flagged": (val >= 100.0) and fg.get("source_flagged", False)
         })
 
+    if pp and pp.get("value") is not None:
+        val = pp["value"]
+        low_t = pp.get("low_threshold", 70.0)
+        if val >= 200.0:
+            pp_status = "Diagnostic range for diabetes"
+        elif val >= 140.0:
+            pp_status = "Prediabetes range"
+        elif val < low_t or val < 70.0:
+            pp_status = "Low / Below Reference Range (Reactive Hypoglycemia pattern)"
+        else:
+            pp_status = "Normal range"
+        diabetes_classifications.append({
+            "marker": "Post-Prandial Blood Glucose (2-Hour)",
+            "value": f"{val} mg/dL",
+            "classification": pp_status,
+            "diagnostic_threshold": "ADA Standard: <140 mg/dL Normal, 140-199 mg/dL Prediabetes, >=200 mg/dL Diabetes",
+            "source_flagged": (val >= 140.0 or val < low_t or val < 70.0) and pp.get("source_flagged", False)
+        })
+
     if hba1c and hba1c.get("value") is not None:
         val = hba1c["value"]
         if val >= 6.5:
@@ -805,7 +1025,7 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
             "source_flagged": (val >= 5.7) and hba1c.get("source_flagged", False)
         })
 
-    if rg and rg.get("value") is not None and not fg:
+    if rg and rg.get("value") is not None and not fg and not pp:
         val = rg["value"]
         rg_status = "Diagnostic range for diabetes" if val >= 200.0 else ("Elevated Glycemia" if val >= 140.0 else "Normal range")
         diabetes_classifications.append({
@@ -816,22 +1036,42 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
             "source_flagged": (val >= 140.0) and rg.get("source_flagged", False)
         })
 
-    # If both glucose and HbA1c are present, report both separately, never average
-    if glucose_status and hba1c_status:
-        if glucose_status == hba1c_status:
-            diabetes_summary = f"Both fasting glucose and HbA1c concordantly indicate {glucose_status}."
-        else:
-            diabetes_summary = f"Fasting glucose falls in the {glucose_status}, while HbA1c indicates {hba1c_status} (reported separately per ADA clinical guidelines)."
-    elif glucose_status:
-        diabetes_summary = f"Fasting glucose indicates {glucose_status}."
-    elif hba1c_status:
-        diabetes_summary = f"HbA1c indicates {hba1c_status}."
+    # Diabetes summary construction
+    findings_list = []
+    if glucose_status:
+        findings_list.append(f"Fasting glucose indicates {glucose_status}")
+    if pp_status:
+        findings_list.append(f"Post-Prandial glucose indicates {pp_status}")
+    if hba1c_status:
+        findings_list.append(f"HbA1c indicates {hba1c_status}")
+
+    if findings_list:
+        diabetes_summary = ". ".join(findings_list) + "."
+    elif rg and rg.get("value") is not None:
+        diabetes_summary = f"Random blood glucose indicates {rg_status}."
     else:
         diabetes_summary = "Cannot be assessed (glycemic panel pending)."
 
     # 2. OBESITY CLASSIFICATION (WHO Asian-adjusted cutoffs)
     obesity_assessment = {}
     bmi_val = bmi.get("value") if bmi else None
+
+    central_obesity = False
+    central_obesity_note = None
+    if wc is not None:
+        cutoff = 90.0 if is_male else 80.0
+        if wc > cutoff:
+            central_obesity = True
+            central_obesity_note = (
+                f"Waist circumference of {wc} cm exceeds the {int(cutoff)} cm Asian cutoff for "
+                f"{'men' if is_male else 'women'}, flagging central adiposity as an independent metabolic risk modifier."
+            )
+        else:
+            central_obesity = False
+            central_obesity_note = (
+                f"Waist circumference of {wc} cm is within the recommended Asian cutoff (<= {int(cutoff)} cm) for "
+                f"{'men' if is_male else 'women'}."
+            )
 
     if bmi_val is not None:
         if bmi_val < 18.5:
@@ -843,17 +1083,6 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
         else:
             obesity_cat = "Obese (Asian cutoff; standard WHO cutoff is >=30)"
 
-        central_obesity = False
-        central_obesity_note = None
-        if wc is not None:
-            cutoff = 90.0 if is_male else 80.0
-            if wc > cutoff:
-                central_obesity = True
-                central_obesity_note = (
-                    f"Waist circumference of {wc} cm exceeds the {int(cutoff)} cm Asian cutoff for "
-                    f"{'men' if is_male else 'women'}, flagging central adiposity as an independent metabolic risk modifier."
-                )
-
         obesity_assessment = {
             "bmi_value": bmi_val,
             "bmi_unit": "kg/m²",
@@ -864,18 +1093,30 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
             "central_obesity_note": central_obesity_note,
             "source_flagged": bmi.get("source_flagged", False)
         }
+    elif wc is not None:
+        obesity_assessment = {
+            "bmi_value": None,
+            "bmi_unit": "kg/m²",
+            "classification": "Waist Circumference Evaluated",
+            "standard_used": "WHO / ICMR-NIN Asian Waist Cutoffs (Men: 90cm, Women: 80cm)",
+            "bmi_source": "not_present",
+            "central_obesity": central_obesity,
+            "central_obesity_note": central_obesity_note,
+            "source_flagged": central_obesity
+        }
 
     # 3. COMBINED RISK NOTE (Plain language, NO invented single percentage)
-    # Check if all available markers are in the Normal range (Fix Bug F)
     is_glycemic_normal = (
         (glucose_status is None or "Normal" in glucose_status) and
+        (pp_status is None or "Normal" in pp_status) and
         (hba1c_status is None or "Normal" in hba1c_status)
     )
     is_obesity_normal = (
         obesity_assessment.get("classification") == "Normal" and
         not obesity_assessment.get("central_obesity", False)
     )
-    is_all_normal = is_glycemic_normal and is_obesity_normal and (glucose_status is not None or hba1c_status is not None) and (bmi_val is not None)
+    has_any_glycemic = (glucose_status is not None or pp_status is not None or hba1c_status is not None)
+    is_all_normal = is_glycemic_normal and is_obesity_normal and has_any_glycemic and (bmi_val is not None)
 
     if is_data_limited:
         combined_risk_note = (
@@ -884,17 +1125,22 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
         )
     elif is_all_normal:
         combined_risk_note = (
-            f"All monitored metabolic biomarkers (fasting glucose and BMI {bmi_val} kg/m²) are within healthy normal reference ranges. "
+            f"All monitored metabolic biomarkers (glycemic panel and BMI {bmi_val} kg/m²) are within healthy normal reference ranges. "
             "Metabolic health profile is optimal; continue maintaining balanced nutrition and regular physical activity to sustain baseline health."
         )
-    elif bmi_val is not None and (glucose_status or hba1c_status):
+    elif bmi_val is not None and has_any_glycemic:
         bmi_short_cat = obesity_assessment.get("classification", "").split("(")[0].strip()
+        glycemic_desc = glucose_status or pp_status or hba1c_status
         if bmi_short_cat == "Underweight":
-            glycemic_desc = glucose_status or hba1c_status
-            if "Normal" in glycemic_desc:
+            if "Normal" in (glycemic_desc or ""):
                 combined_risk_note = (
                     f"Anthropometric assessment indicates Underweight status (BMI {bmi_val} kg/m²), while glycemic regulation is optimal ({glycemic_desc}). "
                     "Clinical priority focuses on balanced nutritional support, adequate caloric intake, and lean muscle mass development rather than glycemic reduction."
+                )
+            elif "Low" in (glycemic_desc or ""):
+                combined_risk_note = (
+                    f"Anthropometric assessment indicates Underweight status (BMI {bmi_val} kg/m²), alongside lower post-prandial glycemic levels ({glycemic_desc}). "
+                    "Nutritional support emphasizing complex carbohydrates, protein intake, and consistent meal timing is recommended."
                 )
             else:
                 combined_risk_note = (
@@ -906,19 +1152,17 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
                 f"Adiposity evaluation ({bmi_short_cat}: BMI {bmi_val} kg/m²) is accompanied by discordant glycemic markers: "
                 f"fasting glucose falls in the {glucose_status}, while HbA1c indicates {hba1c_status} (reported separately per ADA clinical guidelines; repeat confirmatory testing recommended)."
             )
-        elif "Normal" in (glucose_status or "") and "Normal" in (hba1c_status or "") and bmi_short_cat == "Normal":
+        elif is_glycemic_normal and bmi_short_cat == "Normal":
             combined_risk_note = (
-                f"All monitored biomarkers are within standard reference ranges (BMI {bmi_val} kg/m²: Normal; Glycemia: {glucose_status or hba1c_status}). "
+                f"All monitored biomarkers are within standard reference ranges (BMI {bmi_val} kg/m²: Normal; Glycemia: Normal range). "
                 "Metabolic parameters show healthy baseline regulation."
             )
-        elif "Diagnostic" in (glucose_status or "") or "Diagnostic" in (hba1c_status or "") or "Obese" in bmi_short_cat:
-            glycemic_desc = glucose_status or hba1c_status
+        elif "Diagnostic" in (glucose_status or "") or "Diagnostic" in (pp_status or "") or "Diagnostic" in (hba1c_status or "") or "Obese" in bmi_short_cat:
             combined_risk_note = (
                 f"Adiposity evaluation ({bmi_short_cat}: BMI {bmi_val} kg/m²) and glycemic assessment ({glycemic_desc}) "
                 f"concordantly indicate elevated metabolic risk requiring targeted nutritional and lifestyle guidance."
             )
         else:
-            glycemic_desc = glucose_status or hba1c_status
             combined_risk_note = (
                 f"Adiposity evaluation ({bmi_short_cat}: BMI {bmi_val} kg/m²) and glycemic assessment ({glycemic_desc}) "
                 f"indicate borderline or moderate metabolic risk. Preventive diet and routine activity can restore optimal glycemic balance."
@@ -941,8 +1185,8 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
                 f"Adiposity assessment indicates {obesity_assessment.get('classification')}{central_clause}. "
                 f"Glycemic metrics (fasting glucose / HbA1c) are pending to evaluate complete metabolic risk."
             )
-    elif glucose_status or hba1c_status:
-        glycemic_desc = glucose_status or hba1c_status
+    elif has_any_glycemic:
+        glycemic_desc = glucose_status or pp_status or hba1c_status
         if "Normal" in glycemic_desc:
             combined_risk_note = (
                 f"Glycemic assessment indicates {diabetes_summary} "
@@ -962,7 +1206,7 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
         for term in forbidden_risk_terms:
             if term in combined_risk_note.lower():
                 combined_risk_note = (
-                    f"All monitored metabolic biomarkers (fasting glucose and BMI {bmi_val} kg/m²) are within healthy normal reference ranges. "
+                    f"All monitored metabolic biomarkers (glycemic panel and BMI {bmi_val} kg/m²) are within healthy normal reference ranges. "
                     "Metabolic health profile is optimal; continue maintaining balanced nutrition and regular physical activity to sustain baseline health."
                 )
                 break
@@ -974,8 +1218,11 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
             "summary": diabetes_summary,
             "classifications": diabetes_classifications,
             "fasting_glucose_status": glucose_status,
+            "post_prandial_glucose_status": pp_status,
             "hba1c_status": hba1c_status,
-            "hba1c_ocr_note": verified_json.get("hba1c_ocr_note")
+            "hba1c_ocr_note": verified_json.get("hba1c_ocr_note"),
+            "fasting_glucose_ocr_note": verified_json.get("fasting_glucose_ocr_note"),
+            "pp_glucose_ocr_note": verified_json.get("pp_glucose_ocr_note")
         },
         "obesity_assessment": obesity_assessment,
         "combined_risk_note": combined_risk_note,
@@ -1014,6 +1261,15 @@ def step4_metabolic_post_generation_audit(
         if fg.get("original_value") is not None:
             verified_numbers.add(float(fg["original_value"]))
 
+    pp = verified_json.get("post_prandial_glucose")
+    if pp and pp.get("value") is not None:
+        verified_numbers.add(float(pp["value"]))
+        verified_numbers.add(float(int(pp["value"])))
+        if pp.get("original_value") is not None:
+            verified_numbers.add(float(pp["original_value"]))
+        if pp.get("low_threshold") is not None:
+            verified_numbers.add(float(pp["low_threshold"]))
+
     hba1c = verified_json.get("hba1c")
     if hba1c and hba1c.get("value") is not None:
         verified_numbers.add(float(hba1c["value"]))
@@ -1043,7 +1299,7 @@ def step4_metabolic_post_generation_audit(
 
     # Add standard clinical threshold numbers that the prompt dictates using
     standard_cutoffs = {
-        70.0, 99.0, 100.0, 125.0, 126.0, 139.0, 140.0, 200.0,
+        70.0, 73.0, 99.0, 100.0, 125.0, 126.0, 139.0, 140.0, 150.0, 199.0, 200.0,
         3.5, 3.9, 5.5, 5.6, 5.7, 6.4, 6.5, 7.8, 18.0, 18.0182,
         18.5, 22.9, 23.0, 24.9, 25.0, 29.9, 30.0,
         80.0, 90.0, 1.0, 2.0
@@ -1112,13 +1368,35 @@ def step4_metabolic_post_generation_audit(
 
 def execute_metabolic_pipeline(raw_ocr_text: str, filename: str) -> Dict[str, Any]:
     """
-    Executes the complete 4-step metabolic risk pipeline:
+    Executes the complete metabolic risk pipeline:
+      STEP 0: Pre-extraction document type validation (Bug R: reject research tables)
       STEP 1: Extraction (strict, no derivations)
       STEP 2: Pre-generation gate (code hard-stop, code-only BMI calculation)
       STEP 3: Risk scoring (ADA + WHO Asian cutoffs)
       STEP 4: Post-generation audit (code number & checklist validation)
     """
     logger.info(f"Executing metabolic pipeline for {filename}")
+
+    # STEP 0: Document-type validation check (Bug R: population tables)
+    is_valid_doc, rejection_signals = validate_document_type(raw_ocr_text)
+    if not is_valid_doc:
+        err_msg = (
+            "This appears to be a research or statistical summary table, not an individual lab report. "
+            "Please upload your own personal diagnostic report."
+        )
+        logger.warning(f"[Bug R Document Classification REFUSAL] Signals: {rejection_signals}")
+        return {
+            "success": False,
+            "error": err_msg,
+            "pipeline_status": "REJECTED_NON_PATIENT_DOCUMENT",
+            "filename": filename,
+            "rejection_signals": rejection_signals,
+            "step1_extraction": None,
+            "step4_audit": {
+                "audit_passed": False,
+                "audit_label": "Rejected Non-Patient Document"
+            }
+        }
 
     # STEP 1: Extraction
     step1_res = step1_metabolic_extraction(raw_ocr_text)
@@ -1159,10 +1437,13 @@ def execute_metabolic_pipeline(raw_ocr_text: str, filename: str) -> Dict[str, An
         "obesity_assessment": step3_res["obesity_assessment"],
         "combined_risk_note": step3_res["combined_risk_note"],
         "hba1c_ocr_note": step3_res.get("hba1c_ocr_note") or verified_json.get("hba1c_ocr_note"),
+        "fasting_glucose_ocr_note": verified_json.get("fasting_glucose_ocr_note"),
+        "pp_glucose_ocr_note": verified_json.get("pp_glucose_ocr_note"),
         "audit_passed": audit_res["audit_passed"],
         "audit_label": audit_res["audit_label"],
         "verified_vitals": {
             "fasting_glucose": verified_json.get("fasting_glucose"),
+            "post_prandial_glucose": verified_json.get("post_prandial_glucose"),
             "hba1c": verified_json.get("hba1c"),
             "random_glucose": verified_json.get("random_glucose"),
             "bmi": verified_json.get("bmi"),

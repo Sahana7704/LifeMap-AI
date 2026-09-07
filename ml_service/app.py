@@ -269,6 +269,11 @@ def extract_report(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail="Uploaded file is empty.")
         
         result = process_medical_report(content, file.filename or "uploaded_report.pdf")
+        if result.get("pipeline_status") == "REJECTED_NON_PATIENT_DOCUMENT":
+            raise HTTPException(
+                status_code=422,
+                detail=result.get("error") or "This appears to be a research or statistical summary table, not an individual lab report. Please upload your own personal diagnostic report."
+            )
         return result
     except HTTPException:
         raise
@@ -295,6 +300,11 @@ def extract_metabolic_report(file: UploadFile = File(...)):
 
         from metabolic_pipeline import execute_metabolic_pipeline
         result = execute_metabolic_pipeline(raw_text, filename)
+        if result.get("pipeline_status") == "REJECTED_NON_PATIENT_DOCUMENT":
+            raise HTTPException(
+                status_code=422,
+                detail=result.get("error") or "This appears to be a research or statistical summary table, not an individual lab report. Please upload your own personal diagnostic report."
+            )
         return result
     except HTTPException:
         raise
