@@ -765,6 +765,40 @@ export default function ReportsPage() {
                     </div>
                   </div>
 
+                  {/* OPTIONAL HISTORICAL VISIT TREND ANALYSIS */}
+                  {(selected.extracted_metrics?.trend_analysis?.trends || selected.trend_analysis?.trends) && (
+                    <div className="p-4 bg-gradient-to-r from-blue-50/50 to-indigo-50/40 dark:from-blue-950/20 dark:to-indigo-950/20 rounded-xl border border-blue-200/70 dark:border-blue-800/40 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="material-symbols-outlined text-[18px] text-blue-600 dark:text-blue-400">trending_up</span>
+                          <span className="text-xs font-bold text-blue-900 dark:text-blue-200">
+                            Longitudinal Trend Comparison (Previous Visit Follow-Up)
+                          </span>
+                        </div>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-300">
+                          Follow-Up Context
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        {(selected.extracted_metrics?.trend_analysis?.trends || selected.trend_analysis?.trends).map((t: any, i: number) => (
+                          <div key={i} className="p-2.5 bg-white dark:bg-gray-800 rounded-lg border border-blue-100 dark:border-blue-900/50 text-xs space-y-1">
+                            <span className="text-[11px] font-bold text-gray-700 dark:text-gray-300 block">{t.marker}</span>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-gray-500">Current: <b className="text-gray-900 dark:text-gray-100">{t.current}</b></span>
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                t.direction === 'improving' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                              }`}>
+                                {t.change}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-gray-400 block">Prev: {t.previous}</span>
+                            <span className="text-[10px] text-blue-600 dark:text-blue-400 font-medium block">{t.clinical_note}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {/* POPULATION RISK MODEL (MACHINE LEARNING) - REAL PIMA INDIANS MODEL + REAL SHAP */}
                   {/* Distinct, supplementary second assessment — strictly separated from ADA/WHO clinical thresholds */}
                   {(() => {
