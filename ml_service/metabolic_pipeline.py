@@ -23,18 +23,25 @@ logger = logging.getLogger("lifemap_metabolic")
 
 def validate_document_type(raw_ocr_text: str) -> Tuple[bool, List[str]]:
     """
-    Bug R Gate: Before diagnostic extraction, scan the document for structural
-    signals that indicate it is a population/research statistical summary table,
-    cohort comparison, or meta-analysis — containing NO individual patient.
+    Bug R & Bug S Gate:
+    Validates whether the document is an individual patient diagnostic report
+    or an aggregate statistical / population comparison table from research.
 
-    Signals:
-    1. "N=" or "n=" followed by a number (sample size notation)
-    2. Column headers indicating group comparison ("Yes/No", "Group A/ Group B", "History of X", "Patients With", etc.)
-    3. P-values (e.g. "P Value", ".001", "<.001", "p <", "p =")
-    4. Mean/SD notation format (e.g. "177.5 (62.7)", "mean (sd)", "mean ± sd", "±")
-    5. Multiple percentage columns comparing cohorts (e.g. "No. (%)", "n (%)")
+    Negative Signals (Specific to research/population tables):
+    1. Sample size notation: N= or n= followed by a number >= 10, or (N=...)
+    2. Group / cohort comparison headers (e.g. "Patients With vs Without", "Cases vs Controls", "Group A vs Group B")
+    3. P-values (explicit "P Value", "p < 0.05", "p < .001", etc. - avoiding "PP < 140")
+    4. Mean/SD statistical notation representing a population (e.g. "mean ± sd", "177.5 ± 62.7", "mean (sd)")
+    5. Cohort percentage columns (e.g. "No. (%)", "n (%)", "% (n=)")
 
-    If 2+ of these signals are detected, returns (False, detected_signals).
+    Positive Patient Identifiers (Single-patient report markers):
+    - Patient Name, Patient ID, Reg No, MRN, UHID, Lab No, Sample ID, Referring Doctor, Age/Sex.
+
+    Gate Decision:
+    - If positive single-patient identifiers are present:
+      Only refuse if there are 3+ strong negative signals including sample size notation or group comparison.
+    - If NO positive patient identifier is present:
+      Refuse if 2+ negative signals are detected.
     """
     if not raw_ocr_text:
         return True, []
@@ -42,35 +49,56 @@ def validate_document_type(raw_ocr_text: str) -> Tuple[bool, List[str]]:
     text_norm = unicodedata.normalize('NFKC', raw_ocr_text)
     signals = []
 
-    # 1. Sample size notation: N= or n= followed by a number
-    if re.search(r'\b[Nn]\s*=\s*[0-9]+', text_norm):
+    # 1. Sample size notation: N= or n= followed by a number >= 10
+    if re.search(r'\b[Nn]\s*=\s*[0-9]{2,}\b|\(\s*[Nn]\s*=\s*[0-9]+\s*\)', text_norm):
         signals.append("Sample size notation (N= or n=)")
 
     # 2. Group/cohort comparison headers
     cohort_patterns = [
-        r'\b(?:group\s+[a-z0-9]|cohort|patients\s+with|history\s+of|total\s+sample)\b',
-        r'\b(?:yes|no)\s*\(\s*n\s*=',
-        r'\b(?:cases|controls)\s+vs\b',
-        r'\bwith\s+and\s+without\b',
-        r'\boutcome\s*measure\b'
+        r'\bpatients\s+with\s+(?:vs\.?|versus|and)\s+(?:without|patients)\b',
+        r'\b(?:cases\s+vs\.?\s+controls|group\s+[a-z0-9]\s+vs\.?\s+group|treatment\s+vs\.?\s+placebo)\b',
+        r'\bhistory\s+of\s+[^:\n\r]+:\s*(?:yes\s*[\/\\]\s*no|present\s*[\/\\]\s*absent)\b',
+        r'\b(?:overall\s+cohort|study\s+population|total\s+patients\s*\(n\s*=)\b',
+        r'\bcohort\s+[a-z0-9]\b'
     ]
     if any(re.search(pat, text_norm, re.IGNORECASE) for pat in cohort_patterns):
         signals.append("Group/cohort comparison headers")
 
-    # 3. P-values (e.g. P Value, .001, <.001, p <)
-    if re.search(r'\b(?:p\s*[-–—]?\s*value|\bp\s*[<>=]\s*\.?[0-9]+|<\s*\.?001|\bp\s*<\s*0\b|\b\.[0-9]{3}\b)', text_norm, re.IGNORECASE):
+    # 3. P-values (e.g. P Value, p < 0.05, p < .001)
+    # Strictly avoid matching PP glucose like "(PP) < 140"
+    if re.search(r'\b(?:p\s*[-–—]?\s*val(?:ue)?|p-value)\b|\bp\s*[<>=]\s*(?:0?\.[0-9]{2,4}|\.001)\b', text_norm, re.IGNORECASE):
         signals.append("P-values / statistical significance")
 
-    # 4. Mean (SD) format: e.g. "177.5 (62.7)", "60.2 (17.6)", "mean ± sd"
-    if re.search(r'\b[0-9]+(?:\.[0-9]+)?\s*\(\s*[0-9]+(?:\.[0-9]+)?\s*\)', text_norm) or re.search(r'±\s*[0-9]+|\bmean\s*\(?sd\)?|\bmean\s*±\s*sd\b', text_norm, re.IGNORECASE):
+    # 4. Mean (SD) format: e.g. "177.5 (62.7)", "mean ± sd", "mean (sd)"
+    if re.search(r'\b(?:mean\s*±\s*sd|mean\s*\(\s*sd\s*\)|mean\s*\[\s*sd\s*\])\b|\b[0-9]+(?:\.[0-9]+)?\s*±\s*[0-9]+(?:\.[0-9]+)?\b', text_norm, re.IGNORECASE):
+        signals.append("Mean/SD statistical notation")
+    elif re.search(r'\b(?:mean|sd)\b', text_norm, re.I) and re.search(r'\b[0-9]{2,3}(?:\.[0-9]+)?\s*\(\s*[0-9]{1,3}(?:\.[0-9]+)?\s*\)', text_norm):
         signals.append("Mean/SD statistical notation")
 
     # 5. Cohort percentage columns: e.g. "No. (%)", "n (%)", "% (n=)"
-    if re.search(r'(?:no\.?\s*\(\s*%\s*\)|n\s*\(\s*%\s*\)|%\s*\(n\s*=\s*[0-9]+\))', text_norm, re.IGNORECASE):
+    if re.search(r'\b(?:no\.?\s*\(\s*%\s*\)|n\s*\(\s*%\s*\)|%\s*\(n\s*=\s*[0-9]+\))\b', text_norm, re.IGNORECASE):
         signals.append("Cohort percentage columns")
 
-    is_research_table = len(signals) >= 2
-    return not is_research_table, signals
+    # Positive Patient Identifiers (Single named patient report markers)
+    patient_patterns = [
+        r'\bpatient\s*(?:name)?\s*:\s*[a-zA-Z]',
+        r'\b(?:pt|patient)\s+name\b',
+        r'\b(?:mrn|uhid|reg(?:istration)?\s*(?:no|num|number)?|patient\s*id|pid|lab\s*no|sid|sample\s*id|barcode|ipd|opd)\s*:\s*[a-zA-Z0-9]',
+        r'\b(?:referred\s*by|ref\s*by|dr\.?|doctor|physician)\s*:\s*[a-zA-Z]',
+        r'\b(?:age\s*[\/:]\s*[0-9]{1,3}\s*[\/:]?\s*(?:sex|gender)?)\b',
+        r'\b(?:male|female)\s*[\/,\s]+\d{1,3}\s*(?:y|yr|yrs|years)\b'
+    ]
+    has_patient_id = any(re.search(pat, text_norm, re.IGNORECASE) for pat in patient_patterns)
+
+    # Decision rule:
+    # If the document has a verified individual patient identifier, refuse ONLY IF there are 3+ strong population signals including N= and group comparison.
+    # Otherwise (no patient identifier), refuse if 2+ signals are detected.
+    if has_patient_id:
+        is_research = len(signals) >= 3 and ("Sample size notation (N= or n=)" in signals or "Group/cohort comparison headers" in signals)
+    else:
+        is_research = len(signals) >= 2
+
+    return not is_research, signals
 
 # =====================================================================
 # SYSTEM PROMPTS (Verbatim as specified in user specification)
@@ -361,7 +389,16 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
     try:
         fg_val, fg_start, fg_end, fg_unit, fg_ref = extract_field_robust(
             normalized_text,
-            [r'fasting\s*(?:plasma\s*|blood\s*)?(?:glucose|sugar)', r'\bfbs\b', r'\bfbg\b', r'glucose\s*\(?fasting\)?', r'blood\s*sugar\s*\(?fasting\)?'],
+            [
+                r'fasting\s*(?:plasma\s*|blood\s*)?(?:glucose|sugar)',
+                r'\bfbs\b',
+                r'\bfbg\b',
+                r'blood\s*glucose\s*\(?\s*f\s*\)?',
+                r'glucose\s*\(?\s*f\s*\)?',
+                r'blood\s*sugar\s*\(?\s*f\s*\)?',
+                r'glucose\s*\(?fasting\)?',
+                r'blood\s*sugar\s*\(?fasting\)?'
+            ],
             40.0, 500.0,
             unit_pattern=r'(?:mg\s*[\/\.]\s*d[lL]|mmol\s*[\/\.]\s*[lL])',
             allow_mmol=True,
@@ -420,8 +457,9 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
                 r'post\s*prandial\s*(?:plasma\s*|blood\s*)?(?:glucose|sugar)',
                 r'\bppbs\b',
                 r'\bppbg\b',
-                r'glucose\s*\(?pp\)?',
-                r'blood\s*sugar\s*\(?pp\)?',
+                r'blood\s*glucose\s*\(?\s*pp\s*\)?',
+                r'glucose\s*\(?\s*pp\s*\)?',
+                r'blood\s*sugar\s*\(?\s*pp\s*\)?',
                 r'2\s*[-–—]?\s*h(?:ou)?r\s*post\s*(?:meal|glucose)',
                 r'post\s*meal\s*(?:blood\s*)?glucose'
             ],
@@ -809,8 +847,15 @@ def step2_metabolic_pre_generation_gate(
 
     # Verify HbA1c
     if hba1c and hba1c.get("value") is not None:
-        v_str = str(hba1c["value"])
-        if v_str in normalized_ocr or re.search(rf'\b{re.escape(v_str)}\b', normalized_ocr):
+        val = hba1c["value"]
+        v_str = str(val)
+        int_str = str(int(val)) if val == int(val) else None
+        matched = (
+            v_str in normalized_ocr or
+            re.search(rf'\b{re.escape(v_str)}\b', normalized_ocr) or
+            (int_str and (int_str in normalized_ocr or re.search(rf'\b{re.escape(int_str)}\b', normalized_ocr)))
+        )
+        if matched:
             verified_json["hba1c"] = hba1c
             if hba1c.get("source_flagged"):
                 verified_json["required_flagged_checklist"].append("HbA1c")
@@ -911,7 +956,7 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
       * HbA1c >=6.5% -> 'Diagnostic range for diabetes'
       * HbA1c 5.7-6.4% -> 'Prediabetes range'
       * HbA1c <5.7% -> 'Normal range'
-      * If glucose and HbA1c disagree, report each separately — never average.
+      * If glucose and HbA1c disagree, report each separately -- never average.
     - OBESITY classification (WHO Asian-adjusted cutoffs):
       * BMI <18.5 -> Underweight
       * BMI 18.5-22.9 -> Normal
