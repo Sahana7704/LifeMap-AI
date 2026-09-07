@@ -364,4 +364,31 @@ def recommend_lifestyle(req: RecommendationRequest):
         "exercise_plan": exercise_plan
     }
 
+class PimaRiskRequest(BaseModel):
+    glucose: Optional[float] = Field(default=None)
+    fasting_glucose: Optional[float] = Field(default=None)
+    post_prandial_glucose: Optional[float] = Field(default=None)
+    hba1c: Optional[float] = Field(default=None)
+    bmi: Optional[float] = Field(default=None)
+    age: Optional[float] = Field(default=None)
+    sex: Optional[str] = Field(default="Male")
+    blood_pressure: Optional[float] = Field(default=None)
+    diastolic_bp: Optional[float] = Field(default=None)
+    pregnancies: Optional[float] = Field(default=None)
+    insulin: Optional[float] = Field(default=None)
+    skin_thickness: Optional[float] = Field(default=None)
+    diabetes_pedigree: Optional[float] = Field(default=None)
+
+@app.post("/predict-pima-risk")
+def predict_pima_risk_endpoint(req: PimaRiskRequest):
+    try:
+        from pima_model_service import predict_pima_diabetes_with_shap
+        vitals_dict = req.dict()
+        res = predict_pima_diabetes_with_shap(vitals_dict)
+        return res
+    except Exception as e:
+        logger.exception(f"Pima risk prediction failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Pima risk prediction failed: {str(e)}")
+
+
 

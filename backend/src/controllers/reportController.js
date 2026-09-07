@@ -664,6 +664,8 @@ async function uploadMetabolicReport(req, res) {
     const diabetesAss = ocrResult.diabetes_assessment || {};
     const obesityAss = ocrResult.obesity_assessment || {};
     const combinedRiskNote = ocrResult.combined_risk_note || '';
+    // Supplementary Pima ML population model & real computed SHAP drivers
+    const pimaModel = ocrResult.pima_population_model || null;
 
     // Enriched metadata stored in medical_reports
     const enrichedMetrics = {
@@ -683,6 +685,7 @@ async function uploadMetabolicReport(req, res) {
       obesity_assessment: obesityAss,
       combined_risk_note: combinedRiskNote,
       step4_audit: ocrResult.step4_audit,
+      pima_population_model: pimaModel,
       pipeline_version: 'metabolic_v1_ada_who',
       pipeline_status: 'APPROVED'
     };
@@ -718,7 +721,9 @@ async function uploadMetabolicReport(req, res) {
         waist_circumference_cm: verifiedVitals.waist_circumference_cm ?? null,
         age: verifiedVitals.age ?? null,
         gender: verifiedVitals.sex ?? null,
-        sex: verifiedVitals.sex ?? null
+        sex: verifiedVitals.sex ?? null,
+        blood_pressure: profileRes.rows[0].vitals?.blood_pressure || 120,
+        cholesterol: profileRes.rows[0].vitals?.cholesterol || 190
       };
 
       await db.query(
@@ -740,68 +745,99 @@ async function uploadMetabolicReport(req, res) {
     }
 
     // Build risk increasing factors and protective factors for dashboard display
-    const riskIncreasing = [];
-    const protective = [];
+    // If real SHAP factors are computed from the trained Pima ML model, map them directly!
+    let finalRiskIncreasing = [];
+    let finalProtective = [];
 
-    (diabetesAss.classifications || []).forEach(c => {
-      const isHbA1c = (c.marker || '').toLowerCase().includes('hba1c') || (c.marker || '').toLowerCase().includes('a1c');
-      const featKey = isHbA1c ? 'hba1c' : 'fasting_glucose';
-      const isDiagnostic = (c.classification || '').includes('Diagnostic');
-      const isPrediabetes = (c.classification || '').includes('Prediabetes');
+    if (pimaModel && pimaModel.shap_drivers) {
+      finalRiskIncreasing = (pimaModel.shap_drivers.risk_increasing || []).map(f => ({
+        feature: f.feature,
+        label: f.label,
+        raw_value: f.raw_value,
+        formatted_value: f.formatted_value,
+        shap_value: f.shap_value,
+        impact_pct: f.impact_pct,
+        category: 'pima_ml_shap',
+        direction: 'increases_risk',
+        tip: f.clinical_guidance,
+        source_flagged: false,
+        is_imputed: f.is_imputed
+      }));
 
-      if (isDiagnostic || isPrediabetes || c.source_flagged) {
-        riskIncreasing.push({
-          feature: featKey,
-          label: c.marker,
-          raw_value: c.value,
-          formatted_value: `${c.value} · ${c.classification}`,
-          impact_pct: isDiagnostic ? 35 : 20,
-          category: 'metabolic',
-          direction: 'increases_risk',
-          tip: c.diagnostic_threshold,
-          source_flagged: c.source_flagged || false,
-          diagnostic_criterion: isDiagnostic ? c.classification : (isPrediabetes ? 'Prediabetes' : null)
-        });
-      } else {
-        protective.push({
-          feature: featKey,
-          label: c.marker,
-          raw_value: c.value,
-          formatted_value: `${c.value} · Normal (${c.diagnostic_threshold})`,
-          impact_pct: 25,
-          category: 'metabolic',
-          direction: 'decreases_risk',
-          tip: `${c.marker} is in optimal healthy reference range.`
-        });
-      }
-    });
+      finalProtective = (pimaModel.shap_drivers.protective || []).map(f => ({
+        feature: f.feature,
+        label: f.label,
+        raw_value: f.raw_value,
+        formatted_value: f.formatted_value,
+        shap_value: f.shap_value,
+        impact_pct: f.impact_pct,
+        category: 'pima_ml_shap',
+        direction: 'decreases_risk',
+        tip: f.clinical_guidance,
+        source_flagged: false,
+        is_imputed: f.is_imputed
+      }));
+    } else {
+      (diabetesAss.classifications || []).forEach(c => {
+        const isHbA1c = (c.marker || '').toLowerCase().includes('hba1c') || (c.marker || '').toLowerCase().includes('a1c');
+        const featKey = isHbA1c ? 'hba1c' : 'fasting_glucose';
+        const isDiagnostic = (c.classification || '').includes('Diagnostic');
+        const isPrediabetes = (c.classification || '').includes('Prediabetes');
 
-    if (obesityAss.bmi_value != null) {
-      const isObeseOrOver = obesityAss.classification.includes('Obese') || obesityAss.classification.includes('Overweight');
-      if (isObeseOrOver || obesityAss.source_flagged) {
-        riskIncreasing.push({
-          feature: 'bmi',
-          label: 'Body Mass Index (BMI)',
-          raw_value: `${obesityAss.bmi_value} kg/m²`,
-          formatted_value: `${obesityAss.bmi_value} kg/m² · ${obesityAss.classification}`,
-          impact_pct: obesityAss.classification.includes('Obese') ? 25 : 15,
-          category: 'obesity',
-          direction: 'increases_risk',
-          tip: `${obesityAss.standard_used}${obesityAss.central_obesity_note ? ' · ' + obesityAss.central_obesity_note : ''}`,
-          source_flagged: obesityAss.source_flagged || false,
-          diagnostic_criterion: obesityAss.classification.includes('Obese') ? 'Obese (Asian cutoff)' : null
-        });
-      } else {
-        protective.push({
-          feature: 'bmi',
-          label: 'Body Mass Index (BMI)',
-          raw_value: `${obesityAss.bmi_value} kg/m²`,
-          formatted_value: `${obesityAss.bmi_value} kg/m² · ${obesityAss.classification}`,
-          impact_pct: 20,
-          category: 'obesity',
-          direction: 'decreases_risk',
-          tip: `Within healthy Asian cutoff standard (${obesityAss.standard_used}).`
-        });
+        if (isDiagnostic || isPrediabetes || c.source_flagged) {
+          finalRiskIncreasing.push({
+            feature: featKey,
+            label: c.marker,
+            raw_value: c.value,
+            formatted_value: `${c.value} · ${c.classification}`,
+            impact_pct: isDiagnostic ? 35 : 20,
+            category: 'metabolic',
+            direction: 'increases_risk',
+            tip: c.diagnostic_threshold,
+            source_flagged: c.source_flagged || false,
+            diagnostic_criterion: isDiagnostic ? c.classification : (isPrediabetes ? 'Prediabetes' : null)
+          });
+        } else {
+          finalProtective.push({
+            feature: featKey,
+            label: c.marker,
+            raw_value: c.value,
+            formatted_value: `${c.value} · Normal (${c.diagnostic_threshold})`,
+            impact_pct: 25,
+            category: 'metabolic',
+            direction: 'decreases_risk',
+            tip: `${c.marker} is in optimal healthy reference range.`
+          });
+        }
+      });
+
+      if (obesityAss.bmi_value != null) {
+        const isObeseOrOver = obesityAss.classification.includes('Obese') || obesityAss.classification.includes('Overweight');
+        if (isObeseOrOver || obesityAss.source_flagged) {
+          finalRiskIncreasing.push({
+            feature: 'bmi',
+            label: 'Body Mass Index (BMI)',
+            raw_value: `${obesityAss.bmi_value} kg/m²`,
+            formatted_value: `${obesityAss.bmi_value} kg/m² · ${obesityAss.classification}`,
+            impact_pct: obesityAss.classification.includes('Obese') ? 25 : 15,
+            category: 'obesity',
+            direction: 'increases_risk',
+            tip: `${obesityAss.standard_used}${obesityAss.central_obesity_note ? ' · ' + obesityAss.central_obesity_note : ''}`,
+            source_flagged: obesityAss.source_flagged || false,
+            diagnostic_criterion: obesityAss.classification.includes('Obese') ? 'Obese (Asian cutoff)' : null
+          });
+        } else {
+          finalProtective.push({
+            feature: 'bmi',
+            label: 'Body Mass Index (BMI)',
+            raw_value: `${obesityAss.bmi_value} kg/m²`,
+            formatted_value: `${obesityAss.bmi_value} kg/m² · ${obesityAss.classification}`,
+            impact_pct: 20,
+            category: 'obesity',
+            direction: 'decreases_risk',
+            tip: `Within healthy Asian cutoff standard (${obesityAss.standard_used}).`
+          });
+        }
       }
     }
 
@@ -837,10 +873,10 @@ async function uploadMetabolicReport(req, res) {
       [
         explId,
         predictionId,
-        JSON.stringify(riskIncreasing.map(f => f.label)),
-        JSON.stringify(riskIncreasing),
-        JSON.stringify(protective),
-        JSON.stringify({ combined_risk_note: combinedRiskNote, obesity_assessment: obesityAss }),
+        JSON.stringify(finalRiskIncreasing.map(f => f.label)),
+        JSON.stringify(finalRiskIncreasing),
+        JSON.stringify(finalProtective),
+        JSON.stringify({ combined_risk_note: combinedRiskNote, obesity_assessment: obesityAss, pima_model: pimaModel }),
         new Date().toISOString()
       ]
     );
@@ -854,18 +890,20 @@ async function uploadMetabolicReport(req, res) {
       obesity_assessment: obesityAss,
       step4_audit: ocrResult.step4_audit,
       calculated_vitals: enrichedMetrics,
+      pima_population_model: pimaModel,
       predictions: {
         metabolic: {
           prediction_id: predictionId,
           disease_type: 'Metabolic Health (Diabetes & Obesity)',
           risk_score: null,
-          category: diabetesAss.fasting_glucose_status || 'Evaluated',
-          combined_risk_note: combinedRiskNote,
-          step4_audit: ocrResult.step4_audit,
+          category: metabolicCategory,
+          confidence: 1.0,
+          vitality_score: vitalityScore,
           explanation: {
-            top_features: riskIncreasing.map(f => f.label),
-            risk_increasing_factors: riskIncreasing,
-            protective_factors: protective
+            top_features: finalRiskIncreasing.map(f => f.label || f.feature),
+            risk_increasing_factors: finalRiskIncreasing,
+            protective_factors: finalProtective,
+            all_contributions: pimaModel?.shap_drivers?.all_features_shap || []
           }
         },
         diabetes: {
@@ -947,6 +985,7 @@ async function uploadMetabolicReport(req, res) {
       obesity_assessment: obesityAss,
       combined_risk_note: combinedRiskNote,
       step4_audit: ocrResult.step4_audit,
+      pima_population_model: pimaModel,
       verified_vitals: verifiedVitals,
       audit_passed: ocrResult.audit_passed,
       summary: combinedRiskNote

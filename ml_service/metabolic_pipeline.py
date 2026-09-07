@@ -1467,6 +1467,15 @@ def execute_metabolic_pipeline(raw_ocr_text: str, filename: str) -> Dict[str, An
     # STEP 4: Post-generation Audit Gate
     audit_res = step4_metabolic_post_generation_audit(verified_json, step3_res, filename)
 
+    # Supplementary Population Risk Model (Pima Indians Benchmark + Real SHAP)
+    # Kept strictly as a separate, complementary layer without merging into clinical thresholds
+    pima_population_model = None
+    try:
+        from pima_model_service import predict_pima_diabetes_with_shap
+        pima_population_model = predict_pima_diabetes_with_shap(verified_json)
+    except Exception as pe:
+        logger.exception(f"Pima population model inference failed: {pe}")
+
     return {
         "success": audit_res["audit_passed"],
         "pipeline_version": "metabolic_v1_ada_who",
@@ -1476,6 +1485,7 @@ def execute_metabolic_pipeline(raw_ocr_text: str, filename: str) -> Dict[str, An
         "step2_verified_json": verified_json,
         "step3_risk_scoring": step3_res,
         "step4_audit": audit_res,
+        "pima_population_model": pima_population_model,
         # Direct convenience views for frontend UI
         "data_limited": step3_res.get("data_limited", False),
         "diabetes_assessment": step3_res["diabetes_assessment"],

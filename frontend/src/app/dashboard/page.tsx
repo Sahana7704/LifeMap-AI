@@ -1031,7 +1031,7 @@ export default function DashboardPage() {
                         </div>
                         <div>
                           <span className="font-bold text-base text-gray-900 dark:text-gray-100 block">Diabetes Risk Score</span>
-                          <span className="text-[11px] text-gray-400 font-medium">AI Model Assessment</span>
+                          <span className="text-[11px] text-gray-400 font-medium">Clinical Standard Assessment</span>
                         </div>
                       </div>
 
@@ -1084,7 +1084,7 @@ export default function DashboardPage() {
                         </div>
                         <div>
                           <span className="font-bold text-base text-gray-900 dark:text-gray-100 block">Cardiovascular Risk Score</span>
-                          <span className="text-[11px] text-gray-400 font-medium">AI Model Assessment</span>
+                          <span className="text-[11px] text-gray-400 font-medium">Cardiovascular Risk Assessment</span>
                         </div>
                       </div>
 
@@ -1191,7 +1191,7 @@ export default function DashboardPage() {
                   </h2>
                 </div>
                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                  {isLiveUser ? 'Real SHAP clinical factors identified by our machine learning model for your vitals.' : 'Sample SHAP factor explanation preview.'}
+                  {isLiveUser ? 'Clinical factors identified against ADA/WHO diagnostic guidelines.' : 'Clinical factor explanation preview.'}
                 </p>
               </div>
 
@@ -1242,7 +1242,9 @@ export default function DashboardPage() {
                             </span>
                           </div>
                           <span className="px-2.5 py-1 rounded-full bg-rose-100 dark:bg-rose-900/50 text-rose-800 dark:text-rose-200 text-xs font-semibold shrink-0">
-                            +{factor.impact_pct || 10}% impact
+                            {factor.shap_value != null
+                              ? `+${Number(factor.shap_value).toFixed(3)} SHAP (${factor.impact_pct || 10}%)`
+                              : `+${factor.impact_pct || 10}% impact`}
                           </span>
                         </div>
 
@@ -1300,7 +1302,9 @@ export default function DashboardPage() {
                             </span>
                           </div>
                           <span className="px-2.5 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/50 text-emerald-800 dark:text-emerald-200 text-xs font-semibold shrink-0">
-                            -{factor.impact_pct || 8}% protection!
+                            {factor.shap_value != null
+                              ? `${Number(factor.shap_value).toFixed(3)} SHAP (${factor.impact_pct || 8}%)`
+                              : `-${factor.impact_pct || 8}% protection!`}
                           </span>
                         </div>
                         <div className="w-full bg-emerald-100/60 dark:bg-emerald-900/30 h-2 rounded-full overflow-hidden">
