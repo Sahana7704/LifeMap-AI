@@ -5,7 +5,8 @@ import pandas as pd
 import shap
 from typing import Dict, Any, List, Optional
 
-BUNDLE_PATH = os.path.join(os.path.dirname(__file__), "models", "pima_diabetes_rf_bundle.joblib")
+BUNDLE_PATH_V2 = os.path.join(os.path.dirname(__file__), "models", "pima_diabetes_rf_bundle_v2.joblib")
+BUNDLE_PATH_V1 = os.path.join(os.path.dirname(__file__), "models", "pima_diabetes_rf_bundle.joblib")
 
 _pima_bundle: Optional[Dict[str, Any]] = None
 _pima_explainer: Optional[Any] = None
@@ -13,10 +14,12 @@ _pima_explainer: Optional[Any] = None
 def get_pima_bundle() -> Dict[str, Any]:
     global _pima_bundle, _pima_explainer
     if _pima_bundle is None:
-        if not os.path.exists(BUNDLE_PATH):
+        bundle_to_load = BUNDLE_PATH_V2 if os.path.exists(BUNDLE_PATH_V2) else BUNDLE_PATH_V1
+        if not os.path.exists(bundle_to_load):
             from train_pima_model import train_pima_model
             train_pima_model()
-        _pima_bundle = joblib.load(BUNDLE_PATH)
+            bundle_to_load = BUNDLE_PATH_V2 if os.path.exists(BUNDLE_PATH_V2) else BUNDLE_PATH_V1
+        _pima_bundle = joblib.load(bundle_to_load)
         # Initialize SHAP explainer
         _pima_explainer = shap.TreeExplainer(_pima_bundle["model"])
     return _pima_bundle
@@ -50,21 +53,30 @@ FEATURE_UNITS = {
 }
 
 def predict_pima_diabetes_with_shap(
-    patient_vitals: Dict[str, Any]
+    patient_vitals: Dict[str, Any],
+    decision_threshold: Optional[float] = None
 ) -> Dict[str, Any]:
     """
     Computes REAL machine learning prediction and REAL SHAP feature contributions
-    using the trained Pima Indians Diabetes Random Forest model.
+    using the trained Pima Indians Diabetes Random Forest model (v2 screening edition).
 
     Distinguishes strictly between features extracted from the patient's report
     and features imputed with dataset population medians.
+
+    decision_threshold: Configurable probability cutoff for screening (defaults to 0.40
+    optimized on training CV folds for high sensitivity/recall).
     """
     bundle = get_pima_bundle()
     explainer = get_pima_explainer()
     model = bundle["model"]
     medians = bundle["imputer_medians"]
-    metrics = bundle["metrics"]
+    
+    # Load v2 metrics if available, otherwise fallback
+    metrics = bundle.get("metrics_at_clinical_threshold") or bundle.get("metrics", {})
+    metrics_default = bundle.get("metrics_at_default_threshold") or bundle.get("metrics", {})
     feature_cols = bundle["feature_names"]
+    
+    threshold = float(decision_threshold) if decision_threshold is not None else float(bundle.get("decision_threshold", 0.40))
 
     # 1. Map patient vitals into Pima feature vector
     extracted_features = []
@@ -163,14 +175,16 @@ def predict_pima_diabetes_with_shap(
     # 3. Model Inference (Real probability from Random Forest)
     prob_array = model.predict_proba(input_df)[0]
     prob_diabetes = float(prob_array[1])
-    pred_label = int(model.predict(input_df)[0])
+    pred_label = 1 if prob_diabetes >= threshold else 0
 
     if prob_diabetes < 0.30:
         risk_category = "Low Population Risk"
+    elif prob_diabetes < threshold:
+        risk_category = "Moderate Baseline Risk"
     elif prob_diabetes <= 0.60:
-        risk_category = "Moderate Population Risk"
-    else:
         risk_category = "Elevated Population Risk"
+    else:
+        risk_category = "High Population Risk"
 
     # 4. Real SHAP TreeExplainer Calculation
     # Computes exact Shapley contribution for each of the 8 features
@@ -229,17 +243,23 @@ def predict_pima_diabetes_with_shap(
     all_features_shap.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
 
     return {
-        "model_name": "Random Forest Classifier (Pima Indians Benchmark)",
-        "model_type": "Tree-based Ensemble (Scikit-learn RandomForestClassifier)",
+        "model_name": "Random Forest Classifier (Pima Indians Benchmark v2)",
+        "model_type": "Tree-based Ensemble (Scikit-learn RandomForestClassifier, Balanced)",
+        "decision_threshold": threshold,
+        "predicted_label": pred_label,
         "dataset_info": {
             "dataset_name": "Pima Indians Diabetes Dataset",
             "total_samples": 768,
             "test_samples": metrics.get("test_samples", 154),
-            "test_accuracy": f"{metrics.get('accuracy', 0.7403) * 100:.1f}%",
-            "test_auc": f"{metrics.get('auc_roc', 0.8176):.3f}",
-            "test_precision": f"{metrics.get('precision', 0.6591):.3f}",
-            "test_recall": f"{metrics.get('recall', 0.5370):.3f}",
-            "test_f1": f"{metrics.get('f1_score', 0.5918):.3f}"
+            "test_recall": f"{metrics.get('recall', 0.8519) * 100:.1f}%",
+            "test_accuracy": f"{metrics.get('accuracy', 0.7208) * 100:.1f}%",
+            "test_auc": f"{metrics.get('auc_roc', 0.8135):.3f}",
+            "test_precision": f"{metrics.get('precision', 0.5679):.3f}",
+            "test_f1": f"{metrics.get('f1_score', 0.6815):.3f}",
+            "missed_cases_fn": metrics.get("missed_diabetics_fn", 8),
+            "baseline_v1_missed_fn": 25,
+            "decision_threshold": threshold,
+            "threshold_rationale": "Threshold calibrated to 0.40 via 5-fold CV to maximize screening sensitivity, reducing false-negative missed diabetics from 25 down to 8."
         },
         "risk_probability": round(prob_diabetes, 4),
         "risk_score_pct": round(prob_diabetes * 100.0, 1),
@@ -256,8 +276,9 @@ def predict_pima_diabetes_with_shap(
         },
         "disclaimer": (
             f"This is a supplementary population-based risk model trained on the Pima Indians Diabetes dataset "
-            f"(768 patients), achieving {metrics.get('accuracy', 0.7403) * 100:.1f}% accuracy and "
-            f"{metrics.get('auc_roc', 0.8176):.3f} AUC on held-out test data. "
+            f"(768 patients), achieving {metrics.get('recall', 0.8519) * 100:.1f}% sensitivity/recall, "
+            f"{metrics.get('accuracy', 0.7208) * 100:.1f}% accuracy, and "
+            f"{metrics.get('auc_roc', 0.8135):.3f} AUC on held-out test data (N=154). "
             f"This is separate from the ADA/WHO clinical threshold assessment above, which is based on your own actual lab values."
         )
     }

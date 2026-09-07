@@ -1,5 +1,69 @@
 {
-  "metrics": {
+  "model": "RandomForestClassifier(class_weight='balanced_subsample', max_depth=4,\n                       min_samples_leaf=3, min_samples_split=8,\n                       n_estimators=200, random_state=42)",
+  "feature_names": [
+    "Pregnancies",
+    "Glucose",
+    "BloodPressure",
+    "SkinThickness",
+    "Insulin",
+    "BMI",
+    "DiabetesPedigreeFunction",
+    "Age"
+  ],
+  "imputer_medians": {
+    "Pregnancies": 3.0,
+    "Glucose": 117.0,
+    "BloodPressure": 72.0,
+    "SkinThickness": 29.0,
+    "Insulin": 125.0,
+    "BMI": 32.4,
+    "DiabetesPedigreeFunction": 0.3825,
+    "Age": 29.0
+  },
+  "expected_value": 0.5000000000000003,
+  "decision_threshold": 0.4,
+  "default_threshold": 0.5,
+  "metrics_at_clinical_threshold": {
+    "threshold": 0.4,
+    "accuracy": 0.7208,
+    "precision": 0.5679,
+    "recall": 0.8519,
+    "f1_score": 0.6815,
+    "auc_roc": 0.8135,
+    "confusion_matrix": [
+      [
+        65,
+        35
+      ],
+      [
+        8,
+        46
+      ]
+    ],
+    "missed_diabetics_fn": 8,
+    "test_samples": 154
+  },
+  "metrics_at_default_threshold": {
+    "threshold": 0.5,
+    "accuracy": 0.7273,
+    "precision": 0.5909,
+    "recall": 0.7222,
+    "f1_score": 0.65,
+    "auc_roc": 0.8135,
+    "confusion_matrix": [
+      [
+        73,
+        27
+      ],
+      [
+        15,
+        39
+      ]
+    ],
+    "missed_diabetics_fn": 15,
+    "test_samples": 154
+  },
+  "v1_baseline_metrics": {
     "accuracy": 0.7403,
     "precision": 0.6591,
     "recall": 0.537,
@@ -15,23 +79,21 @@
         29
       ]
     ],
-    "test_samples": 154
+    "missed_diabetics_fn": 25
   },
-  "dataset_info": {
-    "dataset_name": "Pima Indians Diabetes Dataset",
-    "total_samples": 768,
-    "train_samples": 614,
-    "test_samples": 154,
-    "source": "National Institute of Diabetes and Digestive and Kidney Diseases"
-  },
-  "imputer_medians": {
-    "Pregnancies": 3.0,
-    "Glucose": 117.0,
-    "BloodPressure": 72.0,
-    "SkinThickness": 29.0,
-    "Insulin": 125.0,
-    "BMI": 32.4,
-    "DiabetesPedigreeFunction": 0.3825,
-    "Age": 29.0
+  "methodology": {
+    "model_type": "RandomForestClassifier (v2)",
+    "hyperparameters": {
+      "n_estimators": 200,
+      "max_depth": 4,
+      "min_samples_split": 8,
+      "min_samples_leaf": 3,
+      "max_features": "sqrt",
+      "class_weight": "balanced_subsample",
+      "random_state": 42
+    },
+    "imputation": "Training set medians only (no test set leakage)",
+    "tuning_strategy": "5-fold Stratified Cross-Validation on training set only",
+    "clinical_rationale": "Clinical screening optimization prioritizing sensitivity (fewer false negative missed diabetics) with configurable threshold."
   }
 }

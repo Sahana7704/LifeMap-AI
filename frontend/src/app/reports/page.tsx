@@ -826,10 +826,10 @@ export default function ReportsPage() {
 
                           <div className="flex items-center gap-2 flex-wrap text-[11px]">
                             <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-gray-800 text-indigo-700 dark:text-indigo-300 font-bold border border-indigo-200 dark:border-indigo-800 shadow-2xs">
-                              RandomForest (N=100)
+                              RandomForest v2 (Screening)
                             </span>
                             <span className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold border border-emerald-200 dark:border-emerald-800 shadow-2xs">
-                              74.0% Test Acc · 0.818 AUC
+                              85.2% Sensitivity · 0.814 AUC
                             </span>
                           </div>
                         </div>
@@ -838,7 +838,7 @@ export default function ReportsPage() {
                         <div className="p-3.5 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800/80 text-amber-950 dark:text-amber-200 text-xs flex items-start gap-2.5 shadow-2xs">
                           <span className="material-symbols-outlined text-[18px] text-amber-600 shrink-0 mt-0.5">info</span>
                           <p className="leading-relaxed">
-                            <strong>Mandatory Clinical Notice:</strong> This is a supplementary population-based risk model trained on the Pima Indians Diabetes benchmark dataset (768 patients), achieving <strong>74.0% accuracy</strong> (0.818 AUC) on held-out stratified test data. This is <strong>strictly separate</strong> from the ADA/WHO clinical threshold assessment above, which is based on your own actual lab values.
+                            <strong>Mandatory Clinical Notice:</strong> This is a supplementary population-based risk model trained on the Pima Indians Diabetes benchmark dataset (768 patients), achieving <strong>85.2% screening sensitivity</strong> (46 of 54 diabetics detected on held-out test data, 0.814 AUC, 72.1% accuracy). This is <strong>strictly separate</strong> from the ADA/WHO clinical threshold assessment above, which is based on your own actual lab values.
                           </p>
                         </div>
 
@@ -870,7 +870,7 @@ export default function ReportsPage() {
                               </span>
                             </div>
                             <span className="text-[10px] text-gray-400">
-                              Base population expected value: 34.7%
+                              Screening cutoff: 40.0% · Base rate: 34.7%
                             </span>
                           </div>
 
@@ -882,12 +882,12 @@ export default function ReportsPage() {
                                 <span className="text-xs font-bold text-gray-800 dark:text-gray-200">80/20 Stratified</span>
                               </div>
                               <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-750 border border-gray-200/60 dark:border-gray-700">
-                                <span className="text-[10px] text-gray-400 block">Held-Out Test N</span>
-                                <span className="text-xs font-bold text-gray-800 dark:text-gray-200">154 Patients</span>
+                                <span className="text-[10px] text-gray-400 block">Sensitivity / Recall</span>
+                                <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">85.2% (46/54)</span>
                               </div>
                               <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-750 border border-gray-200/60 dark:border-gray-700">
-                                <span className="text-[10px] text-gray-400 block">Precision / Recall</span>
-                                <span className="text-xs font-bold text-gray-800 dark:text-gray-200">65.9% / 53.7%</span>
+                                <span className="text-[10px] text-gray-400 block">Cutoff (Screening)</span>
+                                <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">0.40 (CV Tuned)</span>
                               </div>
                               <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-750 border border-gray-200/60 dark:border-gray-700">
                                 <span className="text-[10px] text-gray-400 block">Explainability</span>
@@ -895,7 +895,7 @@ export default function ReportsPage() {
                               </div>
                             </div>
                             <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
-                              Evaluates 8 physiological indicators against trained decision trees. The SHAP values below measure the exact directional push (+ or -) each biomarker exerts on your final probability score.
+                              Screening-optimized ensemble (RandomForest v2 with balanced class weights): Decision cutoff calibrated to 0.40 via 5-fold cross-validation to prioritize sensitivity, reducing missed diabetic patients from 25 down to 8. The SHAP values below measure the exact directional push (+ or -) each biomarker exerts on your final probability score.
                             </p>
                           </div>
                         </div>

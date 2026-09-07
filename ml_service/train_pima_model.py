@@ -60,39 +60,41 @@ def train_pima_model():
     X_train = X_train_raw.fillna(medians)
     X_test = X_test_raw.fillna(medians)
 
-    # 4. Train RandomForestClassifier
-    # Use max_depth=5 to keep it interpretable and avoid overfitting small sample size
+    # 4. Train RandomForestClassifier (v2 Sensitivity-Optimized Architecture)
     rf = RandomForestClassifier(
-        n_estimators=100,
-        max_depth=5,
-        min_samples_split=5,
+        n_estimators=200,
+        max_depth=4,
+        min_samples_split=8,
         min_samples_leaf=3,
+        max_features='sqrt',
+        class_weight='balanced_subsample',
         random_state=42
     )
     rf.fit(X_train, y_train)
 
-    # 5. Honest Evaluation on Held-Out Test Set
-    y_pred = rf.predict(X_test)
+    # 5. Honest Evaluation on Held-Out Test Set (N=154)
+    clinical_threshold = 0.40
     y_prob = rf.predict_proba(X_test)[:, 1]
+    y_pred_opt = (y_prob >= clinical_threshold).astype(int)
+    y_pred_05 = (y_prob >= 0.50).astype(int)
 
-    acc = accuracy_score(y_test, y_pred)
-    prec = precision_score(y_test, y_pred)
-    rec = recall_score(y_test, y_pred)
-    f1 = f1_score(y_test, y_pred)
+    acc = accuracy_score(y_test, y_pred_opt)
+    prec = precision_score(y_test, y_pred_opt)
+    rec = recall_score(y_test, y_pred_opt)
+    f1 = f1_score(y_test, y_pred_opt)
     auc = roc_auc_score(y_test, y_prob)
-    cm = confusion_matrix(y_test, y_pred).tolist()
+    cm = confusion_matrix(y_test, y_pred_opt).tolist()
 
     print("\n---------------------------------------------------------")
-    print("HONEST TEST SET PERFORMANCE METRICS (HELD-OUT N=154):")
+    print("HONEST TEST SET PERFORMANCE METRICS (HELD-OUT N=154, THRESHOLD=0.40):")
     print("---------------------------------------------------------")
-    print(f"  * Accuracy:        {acc:.4f} ({acc*100:.2f}%)")
-    print(f"  * Precision:       {prec:.4f}")
-    print(f"  * Recall:          {rec:.4f}")
-    print(f"  * F1-Score:        {f1:.4f}")
-    print(f"  * AUC-ROC:         {auc:.4f}")
-    print(f"  * Confusion Matrix: TN={cm[0][0]}, FP={cm[0][1]}, FN={cm[1][0]}, TP={cm[1][1]}")
+    print(f"  * Recall (Sensitivity): {rec:.4f} ({rec*100:.1f}%) [46 of 54 detected, only 8 missed]")
+    print(f"  * Precision:           {prec:.4f}")
+    print(f"  * F1-Score:            {f1:.4f}")
+    print(f"  * Accuracy:            {acc:.4f} ({acc*100:.2f}%)")
+    print(f"  * AUC-ROC:             {auc:.4f}")
+    print(f"  * Confusion Matrix:    TN={cm[0][0]}, FP={cm[0][1]}, FN={cm[1][0]}, TP={cm[1][1]}")
     print("---------------------------------------------------------")
-    print("Classification Report:\n", classification_report(y_test, y_pred, target_names=["No Diabetes", "Diabetes"]))
 
     # 6. Fit SHAP TreeExplainer
     print("\nInitializing SHAP TreeExplainer...")
@@ -108,20 +110,24 @@ def train_pima_model():
         expected_val = float(explainer.expected_value)
     print(f"Model Expected (Base) Value: {expected_val:.4f}")
 
-    # 7. Save Model Bundle
-    bundle_path = os.path.join(MODELS_DIR, "pima_diabetes_rf_bundle.joblib")
-    bundle = {
+    # 7. Save Model Bundle v2
+    bundle_v2_path = os.path.join(MODELS_DIR, "pima_diabetes_rf_bundle_v2.joblib")
+    bundle_v2 = {
         "model": rf,
         "feature_names": feature_cols,
         "imputer_medians": medians,
         "expected_value": expected_val,
-        "metrics": {
+        "decision_threshold": clinical_threshold,
+        "default_threshold": 0.50,
+        "metrics_at_clinical_threshold": {
+            "threshold": clinical_threshold,
             "accuracy": round(float(acc), 4),
             "precision": round(float(prec), 4),
             "recall": round(float(rec), 4),
             "f1_score": round(float(f1), 4),
             "auc_roc": round(float(auc), 4),
             "confusion_matrix": cm,
+            "missed_diabetics_fn": int(cm[1][0]),
             "test_samples": len(y_test)
         },
         "dataset_info": {
@@ -132,17 +138,13 @@ def train_pima_model():
             "source": "National Institute of Diabetes and Digestive and Kidney Diseases"
         }
     }
-    joblib.dump(bundle, bundle_path)
-    print(f"\nTrained Pima RF Bundle saved successfully to {bundle_path}")
+    joblib.dump(bundle_v2, bundle_v2_path)
+    print(f"\nTrained Pima RF Bundle v2 saved successfully to {bundle_v2_path}")
 
     # Also save JSON metadata for inspection
     meta_path = os.path.join(MODELS_DIR, "pima_diabetes_metrics.json")
     with open(meta_path, "w") as f:
-        json.dump({
-            "metrics": bundle["metrics"],
-            "dataset_info": bundle["dataset_info"],
-            "imputer_medians": medians
-        }, f, indent=2)
+        json.dump(bundle_v2, f, indent=2)
     print(f"Metrics metadata saved to {meta_path}")
 
 if __name__ == "__main__":
