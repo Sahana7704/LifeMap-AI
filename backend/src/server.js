@@ -60,6 +60,14 @@ app.use('/api/recommendations', recommendationRoutes);
 app.use('/api/wellness', wellnessRoutes);
 
 // Health check endpoints
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'LifeMap AI Node.js Backend API',
+    version: '1.0.0',
+    timestamp: new Date().toISOString()
+  });
+});
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });

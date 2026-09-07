@@ -30,6 +30,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+def root():
+    return {
+        "status": "ok",
+        "service": "LifeMap AI Clinical Microservice",
+        "version": "1.0.0"
+    }
+
+@app.get("/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "models_loaded": {
+            "diabetes": diabetes_bundle is not None,
+            "heart": heart_bundle is not None
+        }
+    }
+
 MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
 
 # Load trained models & explainers on startup
