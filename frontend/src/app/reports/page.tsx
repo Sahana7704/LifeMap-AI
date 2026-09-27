@@ -147,7 +147,9 @@ export default function ReportsPage() {
           throw new Error(data.error || 'Could not extract diabetes or obesity-relevant values from this report. Please upload a report with glucose/HbA1c results or height & weight / BMI.');
         }
         let errMsg = data.details ? `${data.error} (${data.details})` : (data.error || 'Upload failed');
-        if (errMsg.includes('502') || errMsg.includes('503') || errMsg.includes('ECONNREFUSED')) {
+        if (res.status === 429 || errMsg.includes('429') || errMsg.toLowerCase().includes('rate-limited') || errMsg.toLowerCase().includes('too many requests')) {
+          errMsg = 'The AI extraction service is experiencing high traffic or cooling down (Render free tier rate limit). Please wait 15–20 seconds and click Upload again.';
+        } else if (errMsg.includes('502') || errMsg.includes('503') || errMsg.includes('ECONNREFUSED')) {
           errMsg = 'The AI extraction engine was waking up from sleep (Render free tier). Please wait 5–10 seconds and click Upload again.';
         }
         throw new Error(errMsg);

@@ -585,6 +585,12 @@ async function uploadReport(req, res) {
         risk_score: null
       });
     }
+    if (err.response?.status === 429 || (err.message && err.message.includes('429'))) {
+      return res.status(429).json({
+        error: 'The AI extraction engine is temporarily rate-limited or cooling down.',
+        details: 'Render or AI service rate limit reached. Please wait 15–20 seconds and click Upload again.'
+      });
+    }
     const detailMsg = err.response?.data?.detail || err.response?.data?.error || err.message;
     return res.status(500).json({ error: 'Failed to process report with OCR pipeline', details: detailMsg });
   }
@@ -1097,6 +1103,12 @@ async function uploadMetabolicReport(req, res) {
         error: detail,
         message: detail,
         pipeline_status: isRejection ? 'REJECTED_NON_PATIENT_DOCUMENT' : 'HARD_STOP_PRE_GENERATION'
+      });
+    }
+    if (err.response?.status === 429 || (err.message && err.message.includes('429'))) {
+      return res.status(429).json({
+        error: 'The AI metabolic extraction engine is temporarily rate-limited or cooling down.',
+        details: 'Rate limit (429) hit during microservice processing. Please wait 15–20 seconds and click Upload again.'
       });
     }
     return res.status(500).json({ error: 'Failed to process metabolic report', details: err.message });

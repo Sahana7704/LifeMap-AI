@@ -1,11 +1,25 @@
 const axios = require('axios');
 const FormData = require('form-data');
 
-const FASTAPI_URL = process.env.FASTAPI_URL || 'http://127.0.0.1:8000';
+let rawFastApiUrl = process.env.FASTAPI_URL || 'http://127.0.0.1:8000';
+if (!rawFastApiUrl.startsWith('http://') && !rawFastApiUrl.startsWith('https://')) {
+  rawFastApiUrl = `http://${rawFastApiUrl}`;
+}
+try {
+  const parsed = new URL(rawFastApiUrl);
+  if (!parsed.port && !parsed.hostname.includes('.') && parsed.hostname !== 'localhost') {
+    parsed.port = '8000';
+    rawFastApiUrl = parsed.toString().replace(/\/$/, '');
+  }
+} catch (e) {
+  // Use fallback URL if malformed
+}
+const FASTAPI_URL = rawFastApiUrl;
 
 function isTransientError(err) {
   const status = err.response?.status;
   return (
+    status === 429 ||
     status === 502 ||
     status === 503 ||
     status === 504 ||
@@ -24,8 +38,9 @@ async function retryOperation(fn, operationName, maxRetries = 3, delayMs = 4000)
       lastError = err;
       const status = err.response?.status;
       if (isTransientError(err) && attempt < maxRetries) {
-        console.warn(`[fastapiClient] ${operationName} attempt ${attempt} failed with ${status ? `status ${status}` : err.code} (service may be waking up from sleep). Retrying in ${delayMs / 1000}s...`);
-        await new Promise(r => setTimeout(r, delayMs));
+        const waitTime = status === 429 ? (delayMs * 1.5 * attempt) : (delayMs * attempt);
+        console.warn(`[fastapiClient] ${operationName} attempt ${attempt} failed with ${status ? `status ${status}` : err.code} (${status === 429 ? 'Rate limit cooling down' : 'service waking up'}). Retrying in ${Math.round(waitTime / 1000)}s...`);
+        await new Promise(r => setTimeout(r, waitTime));
         continue;
       }
       throw err;
