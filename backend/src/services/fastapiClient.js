@@ -75,7 +75,7 @@ async function extractReport(fileBuffer, filename, mimetype = 'application/pdf')
       maxBodyLength: Infinity
     });
     return response.data;
-  }, 'extractReport', 3, 5000);
+  }, 'extractReport', 4, 5000);
 }
 
 async function extractMetabolicReport(fileBuffer, filename, mimetype = 'application/pdf') {
@@ -93,7 +93,7 @@ async function extractMetabolicReport(fileBuffer, filename, mimetype = 'applicat
       maxBodyLength: Infinity
     });
     return response.data;
-  }, 'extractMetabolicReport', 3, 5000);
+  }, 'extractMetabolicReport', 4, 5000);
 }
 
 async function getRecommendations(recommendationData) {

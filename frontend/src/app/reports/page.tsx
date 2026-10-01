@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { api } from '@/lib/api';
+import { api, getApiBaseUrl } from '@/lib/api';
 import Link from 'next/link';
 import AuthCard from '@/components/AuthCard';
 
@@ -91,6 +91,9 @@ export default function ReportsPage() {
 
   useEffect(() => {
     fetchReports();
+    // Pre-warm backend and ML microservice early so Render instance is awake before user uploads
+    const warmUrl = getApiBaseUrl();
+    fetch(`${warmUrl}/health`).catch(() => {});
   }, []);
 
   const handleUpload = async () => {
@@ -98,108 +101,141 @@ export default function ReportsPage() {
     setUploading(true);
     setError(null);
     setSelected(null); // Clean wipe previous report state to guarantee zero cross-report contamination
-    setUploadStage(panelMode === 'metabolic'
-      ? 'Executing Step 1: Deterministic metabolic extraction…'
-      : 'Optimizing image and initializing OCR engine…');
 
-    const step1 = setTimeout(() => {
-      setUploadStage(panelMode === 'metabolic'
-        ? 'Executing Step 2 & 3: Code Pre-Gate & ADA / WHO Asian Scoring…'
-        : 'Detecting text lines and reference ranges…');
-    }, 1500);
+    const MAX_AUTO_RETRIES = 2;
+    for (let attempt = 1; attempt <= MAX_AUTO_RETRIES + 1; attempt++) {
+      let step1: any = null;
+      let step2: any = null;
 
-    const step2 = setTimeout(() => {
-      setUploadStage(panelMode === 'metabolic'
-        ? 'Executing Step 4: Numeric Audit & Verification Gate…'
-        : 'Extracting clinical metrics and updating dashboard…');
-    }, 3500);
-
-    try {
-      const formData = new FormData();
-      formData.append('report', file);
-      const baseUrl = (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))
-        ? 'http://localhost:5000/api'
-        : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api');
-
-      const endpoint = panelMode === 'metabolic'
-        ? `${baseUrl}/reports/metabolic-upload`
-        : `${baseUrl}/reports/upload`;
-
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` },
-        body: formData,
-      });
-      const responseText = await res.text();
-      let data: any = {};
       try {
-        data = JSON.parse(responseText);
-      } catch (parseErr) {
+        setUploadStage(panelMode === 'metabolic'
+          ? (attempt > 1 ? `Retrying Step 1: Metabolic extraction (Attempt ${attempt}/${MAX_AUTO_RETRIES + 1})…` : 'Executing Step 1: Deterministic metabolic extraction…')
+          : (attempt > 1 ? `Retrying OCR engine (Attempt ${attempt}/${MAX_AUTO_RETRIES + 1})…` : 'Optimizing image and initializing OCR engine…'));
+
+        step1 = setTimeout(() => {
+          setUploadStage(panelMode === 'metabolic'
+            ? 'Executing Step 2 & 3: Code Pre-Gate & ADA / WHO Asian Scoring…'
+            : 'Detecting text lines and reference ranges…');
+        }, 1500);
+
+        step2 = setTimeout(() => {
+          setUploadStage(panelMode === 'metabolic'
+            ? 'Executing Step 4: Numeric Audit & Verification Gate…'
+            : 'Extracting clinical metrics and updating dashboard…');
+        }, 3500);
+
+        const formData = new FormData();
+        formData.append('report', file);
+        const baseUrl = getApiBaseUrl();
+
+        const endpoint = panelMode === 'metabolic'
+          ? `${baseUrl}/reports/metabolic-upload`
+          : `${baseUrl}/reports/upload`;
+
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` },
+          body: formData,
+        });
+
+        clearTimeout(step1);
+        clearTimeout(step2);
+
+        const responseText = await res.text();
+        let data: any = {};
+        try {
+          data = JSON.parse(responseText);
+        } catch (parseErr) {
+          if (!res.ok) {
+            throw new Error(`Server returned error ${res.status} (${res.statusText || 'Timeout'}). Please try again.`);
+          }
+        }
+
+        // Check if transient error eligible for retry
+        const isTransient = res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504 ||
+          (data.error && (data.error.includes('429') || data.error.toLowerCase().includes('rate-limited') || data.error.includes('502') || data.error.includes('503')));
+
+        if (!res.ok && isTransient && attempt <= MAX_AUTO_RETRIES) {
+          const waitSeconds = 12;
+          for (let sec = waitSeconds; sec > 0; sec--) {
+            setUploadStage(`AI engine warming up / rate limit cooling down (Render free tier). Auto-retrying in ${sec}s… (Attempt ${attempt}/${MAX_AUTO_RETRIES})`);
+            await new Promise(r => setTimeout(r, 1000));
+          }
+          continue; // Retry loop
+        }
+
         if (!res.ok) {
-          throw new Error(`Server returned error ${res.status} (${res.statusText || 'Timeout'}). Please try again.`);
+          if (data.pipeline_status === 'REJECTED_NON_PATIENT_DOCUMENT') {
+            throw new Error(data.error || data.message || 'This appears to be a research or statistical summary table, not an individual lab report. Please upload your own personal diagnostic report.');
+          }
+          if (data.pipeline_status === 'HARD_STOP_PRE_GENERATION') {
+            throw new Error(data.error || 'Could not extract diabetes or obesity-relevant values from this report. Please upload a report with glucose/HbA1c results or height & weight / BMI.');
+          }
+          let errMsg = data.details ? `${data.error} (${data.details})` : (data.error || 'Upload failed');
+          if (res.status === 429 || errMsg.includes('429') || errMsg.toLowerCase().includes('rate-limited') || errMsg.toLowerCase().includes('too many requests')) {
+            errMsg = 'The AI extraction service is experiencing high traffic or cooling down (Render free tier rate limit). Please click Upload again to retry.';
+          } else if (errMsg.includes('502') || errMsg.includes('503') || errMsg.includes('ECONNREFUSED')) {
+            errMsg = 'The AI extraction engine was waking up from sleep (Render free tier). Please click Upload again to retry.';
+          }
+          throw new Error(errMsg);
+        }
+
+        // Safely ensure summary is a string
+        const summaryString = typeof data.summary === 'string'
+          ? data.summary
+          : data.combined_risk_note || (data.summary && typeof data.summary === 'object'
+          ? Object.entries(data.summary)
+              .filter(([_, v]) => v != null)
+              .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
+              .join(' · ')
+          : 'Report parsed successfully');
+
+        const newReport = {
+          report_id: data.report_id || `rep_${Date.now()}`,
+          raw_image_url: file.name,
+          upload_date: new Date().toISOString(),
+          extraction_confidence: data.confidence || 1.0,
+          extracted_metrics: data.extracted_metrics || {
+            report_type: panelMode === 'metabolic' ? 'Metabolic Panel (Diabetes & Obesity)' : 'Complete Blood Count (CBC)',
+            diabetes_assessment: data.diabetes_assessment,
+            obesity_assessment: data.obesity_assessment,
+            combined_risk_note: data.combined_risk_note,
+            step4_audit: data.step4_audit,
+            verified_vitals: data.verified_vitals,
+            ...(data.extracted_metrics || {})
+          },
+          clinical_flags: data.clinical_flags || {},
+          ocr_text: data.ocr_text || '',
+          summary: summaryString,
+          filename: file.name,
+        };
+
+        setReports(prev => [newReport, ...prev]);
+        setSelected(newReport);
+        showToast(panelMode === 'metabolic'
+          ? '✅ Metabolic assessment verified via 4-step pipeline (ADA + WHO Asian cutoffs)!'
+          : '✅ Report parsed & health dashboard updated with new findings!');
+        setFile(null);
+        setTimeout(() => fetchReports(data.report_id), 1200);
+        return; // Finished successfully
+      } catch (e: any) {
+        clearTimeout(step1);
+        clearTimeout(step2);
+        if (attempt > MAX_AUTO_RETRIES) {
+          setError(e.message || 'Unknown error');
+          return;
+        }
+      } finally {
+        clearTimeout(step1);
+        clearTimeout(step2);
+        if (attempt > MAX_AUTO_RETRIES) {
+          setUploading(false);
+          setUploadStage('');
         }
       }
-      if (!res.ok) {
-        if (data.pipeline_status === 'REJECTED_NON_PATIENT_DOCUMENT') {
-          throw new Error(data.error || data.message || 'This appears to be a research or statistical summary table, not an individual lab report. Please upload your own personal diagnostic report.');
-        }
-        if (data.pipeline_status === 'HARD_STOP_PRE_GENERATION') {
-          throw new Error(data.error || 'Could not extract diabetes or obesity-relevant values from this report. Please upload a report with glucose/HbA1c results or height & weight / BMI.');
-        }
-        let errMsg = data.details ? `${data.error} (${data.details})` : (data.error || 'Upload failed');
-        if (res.status === 429 || errMsg.includes('429') || errMsg.toLowerCase().includes('rate-limited') || errMsg.toLowerCase().includes('too many requests')) {
-          errMsg = 'The AI extraction service is experiencing high traffic or cooling down (Render free tier rate limit). Please wait 15–20 seconds and click Upload again.';
-        } else if (errMsg.includes('502') || errMsg.includes('503') || errMsg.includes('ECONNREFUSED')) {
-          errMsg = 'The AI extraction engine was waking up from sleep (Render free tier). Please wait 5–10 seconds and click Upload again.';
-        }
-        throw new Error(errMsg);
-      }
-
-      // Safely ensure summary is a string
-      const summaryString = typeof data.summary === 'string'
-        ? data.summary
-        : data.combined_risk_note || (data.summary && typeof data.summary === 'object'
-        ? Object.entries(data.summary)
-            .filter(([_, v]) => v != null)
-            .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${v}`)
-            .join(' · ')
-        : 'Report parsed successfully');
-
-      const newReport = {
-        report_id: data.report_id || `rep_${Date.now()}`,
-        raw_image_url: file.name,
-        upload_date: new Date().toISOString(),
-        extraction_confidence: data.confidence || 1.0,
-        extracted_metrics: data.extracted_metrics || {
-          report_type: panelMode === 'metabolic' ? 'Metabolic Panel (Diabetes & Obesity)' : 'Complete Blood Count (CBC)',
-          diabetes_assessment: data.diabetes_assessment,
-          obesity_assessment: data.obesity_assessment,
-          combined_risk_note: data.combined_risk_note,
-          step4_audit: data.step4_audit,
-          verified_vitals: data.verified_vitals,
-          ...(data.extracted_metrics || {})
-        },
-        clinical_flags: data.clinical_flags || {},
-        ocr_text: data.ocr_text || '',
-        summary: summaryString,
-        filename: file.name,
-      };
-
-      setReports(prev => [newReport, ...prev]);
-      setSelected(newReport);
-      showToast(panelMode === 'metabolic'
-        ? '✅ Metabolic assessment verified via 4-step pipeline (ADA + WHO Asian cutoffs)!'
-        : '✅ Report parsed & health dashboard updated with new findings!');
-      setFile(null);
-      setTimeout(() => fetchReports(data.report_id), 1200);
-    } catch (e: any) {
-      setError(e.message || 'Unknown error');
-    } finally {
-      clearTimeout(step1);
-      clearTimeout(step2);
-      setUploading(false);
-      setUploadStage('');
     }
+    setUploading(false);
+    setUploadStage('');
   };
 
   const parseMetrics = (m: any): Record<string, any> => {
@@ -416,9 +452,20 @@ export default function ReportsPage() {
         )}
 
         {error && (
-          <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-xl text-red-700 dark:text-red-300 text-xs flex items-center gap-2">
-            <span className="material-symbols-outlined text-[16px]">error</span>
-            <span>{error}</span>
+          <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-xl text-red-700 dark:text-red-300 text-xs flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="material-symbols-outlined text-[16px] flex-shrink-0">error</span>
+              <span>{error}</span>
+            </div>
+            {file && !uploading && (
+              <button
+                type="button"
+                onClick={handleUpload}
+                className="flex-shrink-0 px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold text-xs transition shadow-sm"
+              >
+                Retry Upload
+              </button>
+            )}
           </div>
         )}
       </div>
