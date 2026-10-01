@@ -89,40 +89,102 @@ export default function ReportsPage() {
     }
   };
 
+  const [serviceStatus, setServiceStatus] = useState<'idle' | 'waking' | 'ready'>('idle');
+  const [cooldownSeconds, setCooldownSeconds] = useState<number>(0);
+
+  // Live countdown timer for rate-limit cooldown
+  useEffect(() => {
+    if (cooldownSeconds <= 0) return;
+    const interval = setInterval(() => {
+      setCooldownSeconds(prev => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [cooldownSeconds]);
+
   useEffect(() => {
     fetchReports();
     // Pre-warm backend and ML microservice early so Render instance is awake before user uploads
-    const warmUrl = getApiBaseUrl();
-    fetch(`${warmUrl}/health`).catch(() => {});
+    const baseUrl = getApiBaseUrl();
+    const cleanBase = baseUrl.replace(/\/api\/?$/, '');
+    setServiceStatus('waking');
+
+    Promise.allSettled([
+      fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(15000) }),
+      fetch(`${cleanBase}/health`, { signal: AbortSignal.timeout(15000) })
+    ]).then((results) => {
+      const anyOk = results.some(r => r.status === 'fulfilled' && (r.value as Response).ok);
+      setServiceStatus(anyOk ? 'ready' : 'idle');
+    }).catch(() => {
+      setServiceStatus('idle');
+    });
   }, []);
 
   const handleUpload = async () => {
-    if (!file) return;
+    if (!file || uploading || cooldownSeconds > 0) return;
+
+    // 1. Client-side File Validation
+    const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
+    if (file.size > MAX_FILE_SIZE) {
+      setError('File size exceeds the 25MB limit. Please upload a smaller PDF or image.');
+      return;
+    }
+    if (file.size === 0) {
+      setError('The selected file is empty. Please select a valid diagnostic lab report.');
+      return;
+    }
+
+    const validExtensions = ['.pdf', '.png', '.jpg', '.jpeg', '.webp'];
+    const lowerName = file.name.toLowerCase();
+    const hasValidExt = validExtensions.some(ext => lowerName.endsWith(ext));
+    if (!hasValidExt) {
+      setError('Unsupported file type. Please upload a PDF lab report or an image (PNG, JPG, WEBP).');
+      return;
+    }
+
     setUploading(true);
     setError(null);
     setSelected(null); // Clean wipe previous report state to guarantee zero cross-report contamination
 
-    const MAX_AUTO_RETRIES = 2;
-    for (let attempt = 1; attempt <= MAX_AUTO_RETRIES + 1; attempt++) {
+    const MAX_ATTEMPTS = 3;
+    const RETRY_DELAYS = [2000, 5000, 10000]; // 2s, 5s, 10s exponential backoff for cold starts / 502 / 503
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       let step1: any = null;
       let step2: any = null;
+      let step3: any = null;
+      const abortController = new AbortController();
+      const clientTimeout = setTimeout(() => abortController.abort(), 90000); // 90s client timeout per attempt
 
       try {
-        setUploadStage(panelMode === 'metabolic'
-          ? (attempt > 1 ? `Retrying Step 1: Metabolic extraction (Attempt ${attempt}/${MAX_AUTO_RETRIES + 1})…` : 'Executing Step 1: Deterministic metabolic extraction…')
-          : (attempt > 1 ? `Retrying OCR engine (Attempt ${attempt}/${MAX_AUTO_RETRIES + 1})…` : 'Optimizing image and initializing OCR engine…'));
+        if (attempt === 1) {
+          setUploadStage('Connecting to AI extraction service (Render free tier cold start may take up to a minute)…');
+        } else {
+          setUploadStage(`Retrying extraction (Attempt ${attempt}/${MAX_ATTEMPTS})…`);
+        }
 
         step1 = setTimeout(() => {
           setUploadStage(panelMode === 'metabolic'
-            ? 'Executing Step 2 & 3: Code Pre-Gate & ADA / WHO Asian Scoring…'
-            : 'Detecting text lines and reference ranges…');
-        }, 1500);
+            ? 'Executing Step 1: Deterministic metabolic extraction…'
+            : 'Optimizing document and initializing OCR engine…');
+        }, 1200);
 
         step2 = setTimeout(() => {
           setUploadStage(panelMode === 'metabolic'
+            ? 'Executing Step 2 & 3: Code Pre-Gate & ADA / WHO Asian Scoring…'
+            : 'Detecting text lines and reference ranges…');
+        }, 3000);
+
+        step3 = setTimeout(() => {
+          setUploadStage(panelMode === 'metabolic'
             ? 'Executing Step 4: Numeric Audit & Verification Gate…'
             : 'Extracting clinical metrics and updating dashboard…');
-        }, 3500);
+        }, 5500);
 
         const formData = new FormData();
         formData.append('report', file);
@@ -136,48 +198,78 @@ export default function ReportsPage() {
           method: 'POST',
           headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` },
           body: formData,
+          signal: abortController.signal
         });
 
+        clearTimeout(clientTimeout);
         clearTimeout(step1);
         clearTimeout(step2);
+        clearTimeout(step3);
 
         const responseText = await res.text();
         let data: any = {};
         try {
           data = JSON.parse(responseText);
         } catch (parseErr) {
-          if (!res.ok) {
-            throw new Error(`Server returned error ${res.status} (${res.statusText || 'Timeout'}). Please try again.`);
-          }
+          // Response body was not JSON (e.g. Render HTML 502/504 page)
         }
 
-        // Check if transient error eligible for retry
-        const isTransient = res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504 ||
-          (data.error && (data.error.includes('429') || data.error.toLowerCase().includes('rate-limited') || data.error.includes('502') || data.error.includes('503')));
+        // Requirement 5: NO AUTO-RETRY ON 429! Honor Retry-After and start cooldown
+        if (res.status === 429 || data?.code === 'RATE_LIMIT') {
+          console.error('[LifeMap Upload 429 Rate Limit]', { status: res.status, data });
+          const retryHeader = res.headers.get('Retry-After');
+          const waitSec = retryHeader ? parseInt(retryHeader, 10) : (data?.retry_after || 15);
+          setCooldownSeconds(waitSec);
+          setError(`The AI extraction service rate limit was reached (HTTP 429). Cooldown active: please wait ${waitSec}s before retrying.`);
+          setUploading(false);
+          setUploadStage('');
+          return; // Stop immediately, no auto-retry on 429
+        }
 
-        if (!res.ok && isTransient && attempt <= MAX_AUTO_RETRIES) {
-          const waitSeconds = 12;
-          for (let sec = waitSeconds; sec > 0; sec--) {
-            setUploadStage(`AI engine warming up / rate limit cooling down (Render free tier). Auto-retrying in ${sec}s… (Attempt ${attempt}/${MAX_AUTO_RETRIES})`);
+        // Check if transient error eligible for retry (cold start: 502, 503, 504)
+        const isTransientStatus = res.status === 502 || res.status === 503 || res.status === 504;
+        const isTransientBody = data?.retryable === true ||
+          data?.code === 'COLD_START' ||
+          (typeof data?.error === 'string' && (data.error.includes('502') || data.error.includes('503') || data.error.includes('waking up'))) ||
+          (typeof data?.details === 'string' && (data.details.includes('502') || data.details.includes('503') || data.details.includes('ECONNREFUSED')));
+
+        const isTransient = !res.ok && (isTransientStatus || isTransientBody);
+
+        if (isTransient && attempt < MAX_ATTEMPTS) {
+          const waitMs = RETRY_DELAYS[attempt - 1] || 5000;
+          const waitSec = Math.round(waitMs / 1000);
+          console.warn(`[LifeMap Upload] Attempt ${attempt}/${MAX_ATTEMPTS} returned transient status ${res.status}. Retrying in ${waitSec}s...`, { status: res.status, data });
+          for (let sec = waitSec; sec > 0; sec--) {
+            setUploadStage(`AI service waking up (Render free tier). Auto-retrying in ${sec}s… (Attempt ${attempt}/${MAX_ATTEMPTS})`);
             await new Promise(r => setTimeout(r, 1000));
           }
-          continue; // Retry loop
+          continue; // Automatically retry loop without requiring user click
         }
 
         if (!res.ok) {
+          console.error('[LifeMap Upload Error Response]', {
+            status: res.status,
+            statusText: res.statusText,
+            responseBody: responseText,
+            data,
+            endpoint,
+            attempt
+          });
+
+          // Specific non-catch-all error messages
           if (data.pipeline_status === 'REJECTED_NON_PATIENT_DOCUMENT') {
             throw new Error(data.error || data.message || 'This appears to be a research or statistical summary table, not an individual lab report. Please upload your own personal diagnostic report.');
           }
           if (data.pipeline_status === 'HARD_STOP_PRE_GENERATION') {
             throw new Error(data.error || 'Could not extract diabetes or obesity-relevant values from this report. Please upload a report with glucose/HbA1c results or height & weight / BMI.');
           }
-          let errMsg = data.details ? `${data.error} (${data.details})` : (data.error || 'Upload failed');
-          if (res.status === 429 || errMsg.includes('429') || errMsg.toLowerCase().includes('rate-limited') || errMsg.toLowerCase().includes('too many requests')) {
-            errMsg = 'The AI extraction service is experiencing high traffic or cooling down (Render free tier rate limit). Please click Upload again to retry.';
-          } else if (errMsg.includes('502') || errMsg.includes('503') || errMsg.includes('ECONNREFUSED')) {
-            errMsg = 'The AI extraction engine was waking up from sleep (Render free tier). Please click Upload again to retry.';
+          if (res.status === 502 || res.status === 503 || res.status === 504 || data?.code === 'COLD_START') {
+            throw new Error('The AI extraction service timed out while waking up from sleep (Render free tier cold start). The service is warming up — please click Retry Upload in 10-15 seconds.');
           }
-          throw new Error(errMsg);
+          if (res.status >= 500) {
+            throw new Error(`Server error (${res.status}): ${data.details || data.error || 'The backend service encountered an issue processing this report.'}`);
+          }
+          throw new Error(data.error || data.message || `Upload failed with status ${res.status}.`);
         }
 
         // Safely ensure summary is a string
@@ -195,6 +287,8 @@ export default function ReportsPage() {
           raw_image_url: file.name,
           upload_date: new Date().toISOString(),
           extraction_confidence: data.confidence || 1.0,
+          fallback_used: data.fallback_used || false,
+          extraction_method: data.extraction_method || 'llm',
           extracted_metrics: data.extracted_metrics || {
             report_type: panelMode === 'metabolic' ? 'Metabolic Panel (Diabetes & Obesity)' : 'Complete Blood Count (CBC)',
             diabetes_assessment: data.diabetes_assessment,
@@ -202,6 +296,7 @@ export default function ReportsPage() {
             combined_risk_note: data.combined_risk_note,
             step4_audit: data.step4_audit,
             verified_vitals: data.verified_vitals,
+            fallback_used: data.fallback_used || false,
             ...(data.extracted_metrics || {})
           },
           clinical_flags: data.clinical_flags || {},
@@ -212,23 +307,58 @@ export default function ReportsPage() {
 
         setReports(prev => [newReport, ...prev]);
         setSelected(newReport);
-        showToast(panelMode === 'metabolic'
-          ? '✅ Metabolic assessment verified via 4-step pipeline (ADA + WHO Asian cutoffs)!'
-          : '✅ Report parsed & health dashboard updated with new findings!');
+        const toastMsg = data.fallback_used
+          ? '✅ Lab findings extracted via deterministic clinical engine (code-only fallback)!'
+          : (panelMode === 'metabolic'
+              ? '✅ Metabolic assessment verified via 4-step pipeline (ADA + WHO Asian cutoffs)!'
+              : '✅ Report parsed & health dashboard updated with new findings!');
+        showToast(toastMsg);
         setFile(null);
         setTimeout(() => fetchReports(data.report_id), 1200);
         return; // Finished successfully
       } catch (e: any) {
+        clearTimeout(clientTimeout);
         clearTimeout(step1);
         clearTimeout(step2);
-        if (attempt > MAX_AUTO_RETRIES) {
-          setError(e.message || 'Unknown error');
+        clearTimeout(step3);
+
+        const isTimeout = e.name === 'AbortError' || (e.message && e.message.toLowerCase().includes('abort'));
+        const isNetwork = e.name === 'TypeError' || (e.message && (e.message.toLowerCase().includes('fetch') || e.message.toLowerCase().includes('network')));
+
+        console.error(`[LifeMap Upload Catch Attempt ${attempt}/${MAX_ATTEMPTS}]`, {
+          errorName: e.name,
+          errorMessage: e.message,
+          isTimeout,
+          isNetwork,
+          attempt
+        });
+
+        if ((isTimeout || isNetwork) && attempt < MAX_ATTEMPTS) {
+          const waitMs = RETRY_DELAYS[attempt - 1] || 5000;
+          const waitSec = Math.round(waitMs / 1000);
+          for (let sec = waitSec; sec > 0; sec--) {
+            setUploadStage(`Connecting to Render service… Retrying in ${sec}s (Attempt ${attempt}/${MAX_ATTEMPTS})`);
+            await new Promise(r => setTimeout(r, 1000));
+          }
+          continue;
+        }
+
+        if (attempt >= MAX_ATTEMPTS) {
+          if (isTimeout) {
+            setError('The request timed out after 90 seconds while waiting for Render free tier services to wake up. Please click Retry Upload now that the service has had time to start.');
+          } else if (isNetwork) {
+            setError(`Could not connect to the backend server (${getApiBaseUrl()}). Please ensure the Render backend service is awake or check your internet connection.`);
+          } else {
+            setError(e.message || 'Unknown error occurred during upload.');
+          }
           return;
         }
       } finally {
+        clearTimeout(clientTimeout);
         clearTimeout(step1);
         clearTimeout(step2);
-        if (attempt > MAX_AUTO_RETRIES) {
+        clearTimeout(step3);
+        if (attempt >= MAX_ATTEMPTS) {
           setUploading(false);
           setUploadStage('');
         }
@@ -403,13 +533,18 @@ export default function ReportsPage() {
 
           <button
             onClick={handleUpload}
-            disabled={!file || uploading}
-            className="px-5 py-2.5 bg-[#00685f] hover:bg-[#005049] text-white text-xs font-bold rounded-xl shadow-sm disabled:opacity-50 transition active:scale-[0.98] flex items-center gap-1.5 cursor-pointer"
+            disabled={!file || uploading || cooldownSeconds > 0}
+            className="px-5 py-2.5 bg-[#00685f] hover:bg-[#005049] text-white text-xs font-bold rounded-xl shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition active:scale-[0.98] flex items-center gap-1.5 cursor-pointer"
           >
             {uploading ? (
               <>
                 <span className="animate-spin text-[14px]">⏳</span>
                 <span>Extracting Findings with OCR…</span>
+              </>
+            ) : cooldownSeconds > 0 ? (
+              <>
+                <span className="text-[14px]">⏳</span>
+                <span>Cooldown ({cooldownSeconds}s)</span>
               </>
             ) : (
               <>
@@ -418,6 +553,19 @@ export default function ReportsPage() {
               </>
             )}
           </button>
+
+          {serviceStatus === 'waking' && (
+            <span className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 px-2.5 py-1.5 rounded-lg border border-amber-200 dark:border-amber-800 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+              <span>Waking up AI service (Render free tier)…</span>
+            </span>
+          )}
+          {serviceStatus === 'ready' && (
+            <span className="text-[11px] text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-2.5 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-800 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+              <span>AI Service Ready</span>
+            </span>
+          )}
         </div>
 
         {uploading && (
@@ -461,9 +609,10 @@ export default function ReportsPage() {
               <button
                 type="button"
                 onClick={handleUpload}
-                className="flex-shrink-0 px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold text-xs transition shadow-sm"
+                disabled={cooldownSeconds > 0}
+                className="flex-shrink-0 px-3 py-1 bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg font-semibold text-xs transition shadow-sm"
               >
-                Retry Upload
+                {cooldownSeconds > 0 ? `Wait ${cooldownSeconds}s` : 'Retry Upload'}
               </button>
             )}
           </div>
@@ -553,9 +702,16 @@ export default function ReportsPage() {
             <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-6 space-y-4">
               <div className="flex items-center justify-between pb-3 border-b border-gray-100 dark:border-gray-700 flex-wrap gap-2">
                 <div>
-                  <h3 className="font-bold text-base text-gray-900 dark:text-gray-100">
-                    📋 Extracted Clinical Findings
-                  </h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-base text-gray-900 dark:text-gray-100">
+                      📋 Extracted Clinical Findings
+                    </h3>
+                    {(selected.fallback_used || selected.extracted_metrics?.fallback_used) && (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200 border border-amber-300 dark:border-amber-700">
+                        ⚡ Code-Only Fallback
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-gray-400 truncate mt-0.5">
                     File: {selected.raw_image_url || selected.filename}
                   </p>

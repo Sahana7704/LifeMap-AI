@@ -10,6 +10,7 @@ Implements:
 import os
 import re
 import json
+import time
 import logging
 import unicodedata
 from typing import Dict, Any, List, Optional, Tuple
@@ -185,34 +186,140 @@ METABOLIC_STEP3_SYSTEM_PROMPT = (
 )
 
 # =====================================================================
-# LLM CALLER DISPATCHER
+# IN-MEMORY CACHE KEYED BY REPORT HASH
+# =====================================================================
+
+_METABOLIC_CACHE: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+_CACHE_TTL_SECONDS = 3600  # 1 hour in-memory cache
+
+def get_cached_extraction(report_hash: str) -> Optional[Dict[str, Any]]:
+    """Returns cached pipeline result if available and fresh, avoiding duplicate LLM calls."""
+    if report_hash in _METABOLIC_CACHE:
+        cached_time, cached_res = _METABOLIC_CACHE[report_hash]
+        if time.time() - cached_time < _CACHE_TTL_SECONDS:
+            logger.info(f"[Cache Hit] Re-uploaded report matched hash {report_hash[:12]} - 0 LLM calls made.")
+            copy_res = json.loads(json.dumps(cached_res))
+            copy_res["cached"] = True
+            return copy_res
+    return None
+
+def set_cached_extraction(report_hash: str, result: Dict[str, Any]):
+    """Stores pipeline result in cache keyed by report hash."""
+    if report_hash and result:
+        _METABOLIC_CACHE[report_hash] = (time.time(), result)
+
+# =====================================================================
+# LLM CALLER DISPATCHER WITH RETRY-AFTER & LIGHTER MODEL
 # =====================================================================
 
 def call_metabolic_llm(system_prompt: str, user_prompt: str) -> Optional[Dict[str, Any]]:
-    """Attempts to invoke Gemini or OpenAI if configured in the environment."""
+    """
+    Invokes external LLM using a light, high-throughput model (default: gemini-2.5-flash-lite).
+    Includes exponential backoff (max 2 retries, honors Retry-After) and detailed logging
+    of upstream status code, model name, and response body on failure.
+    Skips immediately on 404 (model not found).
+    Returns parsed JSON if successful, or None on rate-limit/failure to allow clean fallback.
+    """
     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     openai_key = os.environ.get("OPENAI_API_KEY")
+    groq_key = os.environ.get("GROQ_API_KEY")
+
+    # Prefer lighter, high-throughput model (default: gemini-2.5-flash-lite)
+    # Exclude retired Gemini 1.5 models from candidates
+    raw_primary = os.environ.get("METABOLIC_LLM_MODEL", "gemini-2.5-flash-lite").strip()
+    if "1.5" in raw_primary:
+        raw_primary = "gemini-2.5-flash-lite"
+    candidate_models = []
+    for m in [raw_primary, "gemini-2.5-flash-lite", "gemini-2.5-flash"]:
+        if m and "1.5" not in m and m not in candidate_models:
+            candidate_models.append(m)
 
     if gemini_key:
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel(
-                model_name="gemini-1.5-flash",
-                generation_config={"response_mime_type": "application/json"}
-            )
-            prompt = f"{system_prompt}\n\nUser Input:\n{user_prompt}"
-            response = model.generate_content(prompt)
-            if response and response.text:
-                cleaned = response.text.strip()
-                if cleaned.startswith("```json"):
-                    cleaned = cleaned[7:]
-                if cleaned.endswith("```"):
-                    cleaned = cleaned[:-3]
-                return json.loads(cleaned.strip())
-        except Exception as e:
-            logger.warning(f"Metabolic Gemini API warning: {e}")
+        for model_name in candidate_models:
+            max_upstream_retries = 2
+            for attempt in range(1, max_upstream_retries + 1):
+                try:
+                    import google.generativeai as genai
+                    genai.configure(api_key=gemini_key)
+                    model = genai.GenerativeModel(
+                        model_name=model_name,
+                        generation_config={"response_mime_type": "application/json"}
+                    )
+                    prompt = f"{system_prompt}\n\nUser Input:\n{user_prompt}"
+                    response = model.generate_content(prompt)
+                    if response and response.text:
+                        cleaned = response.text.strip()
+                        if cleaned.startswith("```json"):
+                            cleaned = cleaned[7:]
+                        if cleaned.endswith("```"):
+                            cleaned = cleaned[:-3]
+                        return json.loads(cleaned.strip())
+                except Exception as e:
+                    err_str = str(e)
+                    code_val = getattr(e, "code", None) or getattr(getattr(e, "response", None), "status_code", None)
+                    is_404 = (code_val == 404) or ("404" in err_str) or ("not found" in err_str.lower())
+                    is_429 = (code_val == 429) or ("429" in err_str) or ("quota" in err_str.lower()) or ("resourceexhausted" in err_str.lower())
+                    
+                    status_code = 404 if is_404 else (429 if is_429 else (code_val or 500))
 
+                    # Extract Retry-After if provided in error string or default exponential backoff
+                    retry_after = 2.0 * attempt
+                    m_retry = re.search(r'(?:retry after|wait|cooldown)\s*[:=]?\s*(\d+(?:\.\d+)?)', err_str, re.I)
+                    if m_retry:
+                        try:
+                            retry_after = max(1.0, float(m_retry.group(1)))
+                        except Exception:
+                            pass
+
+                    # Log upstream status code, model name, and response body (Requirement 1)
+                    logger.warning(
+                        f"[Upstream LLM Call Failed] Provider: Gemini | Model: {model_name} | "
+                        f"Status: {status_code} | Upstream Error Body: {err_str[:300]} | "
+                        f"Retry-After: {retry_after}s | Attempt: {attempt}/{max_upstream_retries}"
+                    )
+
+                    # Treat 404 as skip to next model immediately without retrying
+                    if is_404:
+                        logger.info(f"[Gemini 404 Not Found] Skipping {model_name} to next candidate model.")
+                        break
+
+                    if is_429 and attempt < max_upstream_retries:
+                        time.sleep(retry_after)
+                        continue
+                    break  # Try next candidate model or fallback
+
+    # Groq Fallback (High-speed Llama 3.1 8B Instant with generous limits)
+    if groq_key:
+        try:
+            import urllib.request
+            groq_model = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
+            req_data = {
+                "model": groq_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.0,
+                "response_format": {"type": "json_object"}
+            }
+            req = urllib.request.Request(
+                "https://api.groq.com/openai/v1/chat/completions",
+                data=json.dumps(req_data).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {groq_key}",
+                    "Content-Type": "application/json"
+                },
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                content = data["choices"][0]["message"]["content"]
+                logger.info(f"[Groq LLM Success] Extracted via {groq_model}")
+                return json.loads(content)
+        except Exception as e:
+            logger.warning(f"[Groq Upstream Call Failed] Error: {e}")
+
+    # OpenAI Fallback
     if openai_key:
         try:
             import urllib.request
@@ -239,8 +346,9 @@ def call_metabolic_llm(system_prompt: str, user_prompt: str) -> Optional[Dict[st
                 content = data["choices"][0]["message"]["content"]
                 return json.loads(content)
         except Exception as e:
-            logger.warning(f"Metabolic OpenAI API warning: {e}")
+            logger.warning(f"[OpenAI Upstream Call Failed] Model: gpt-4o-mini | Error: {e}")
 
+    logger.info("[Upstream LLM Unavailable/Rate-Limited] Transitioning to deterministic code-only regex fallback.")
     return None
 
 # =====================================================================
@@ -379,6 +487,9 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
         user_prompt=f"OCR Text:\n{normalized_text}"
     )
     if llm_result and isinstance(llm_result, dict) and "fasting_glucose" in llm_result:
+        llm_result["fallback_used"] = False
+        llm_result["extraction_method"] = "llm"
+        llm_result["raw_text_char_count"] = char_count
         return llm_result
 
     # High-precision deterministic extractor strictly following Step 1 rules
@@ -767,7 +878,10 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
         "age": age,
         "sex": sex,
         "extraction_confidence": confidence,
-        "raw_text_char_count": char_count
+        "raw_text_char_count": char_count,
+        "fallback_used": True,
+        "extraction_method": "code_only_regex_fallback",
+        "fallback_reason": "Upstream LLM rate limit (429) or unavailable - extracted deterministically via regex"
     }
 
 # =====================================================================
@@ -993,31 +1107,8 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
       * Waist >90cm (men) or >80cm (women) -> flag central obesity as additional modifier.
     - COMBINED risk note in plain language (no invented blended percentage).
     """
-    user_prompt = f"Verified Step 2 Metabolic JSON:\n{json.dumps(verified_json, indent=2)}"
-
-    llm_result = call_metabolic_llm(
-        system_prompt=METABOLIC_STEP3_SYSTEM_PROMPT,
-        user_prompt=user_prompt
-    )
-    if llm_result and isinstance(llm_result, dict) and "diabetes_assessment" in llm_result:
-        verified_fields_chk = [
-            verified_json.get("fasting_glucose"),
-            verified_json.get("post_prandial_glucose"),
-            verified_json.get("hba1c"),
-            verified_json.get("random_glucose"),
-            verified_json.get("bmi", {}).get("value") if isinstance(verified_json.get("bmi"), dict) else verified_json.get("bmi"),
-            verified_json.get("height_cm"),
-            verified_json.get("weight_kg"),
-            verified_json.get("waist_circumference_cm")
-        ]
-        cnt = sum(1 for x in verified_fields_chk if x is not None)
-        comb_txt = str(llm_result.get("combined_risk_note", "")).lower()
-        if cnt >= 2 and ("fewer than two" in comb_txt or "data-limited" in comb_txt or "data limited" in comb_txt):
-            logger.warning("[Bug M Guard] Overriding LLM data-limited note with verified clinical synthesis.")
-        else:
-            return llm_result
-
-    # High-precision deterministic clinical reasoning engine implementing Step 3 rules
+    # Step 3 utilizes the deterministic ADA criteria & WHO Asian cutoffs clinical engine directly.
+    # This guarantees 100% compliance with clinical standards and reduces upload LLM calls to at most 1.
     fg = verified_json.get("fasting_glucose")
     pp = verified_json.get("post_prandial_glucose")
     hba1c = verified_json.get("hba1c")
@@ -1439,16 +1530,23 @@ def step4_metabolic_post_generation_audit(
 # FULL 4-STEP METABOLIC PIPELINE ORCHESTRATOR
 # =====================================================================
 
-def execute_metabolic_pipeline(raw_ocr_text: str, filename: str) -> Dict[str, Any]:
+def execute_metabolic_pipeline(raw_ocr_text: str, filename: str, file_bytes: Optional[bytes] = None) -> Dict[str, Any]:
     """
     Executes the complete metabolic risk pipeline:
       STEP 0: Pre-extraction document type validation (Bug R: reject research tables)
-      STEP 1: Extraction (strict, no derivations)
+      STEP 1: Extraction (strict, no derivations, fallback to code-only regex if LLM rate-limited)
       STEP 2: Pre-generation gate (code hard-stop, code-only BMI calculation)
-      STEP 3: Risk scoring (ADA + WHO Asian cutoffs)
+      STEP 3: Risk scoring (ADA + WHO Asian cutoffs - deterministic clinical engine)
       STEP 4: Post-generation audit (code number & checklist validation)
     """
     logger.info(f"Executing metabolic pipeline for {filename}")
+
+    # Check in-memory cache first (0 LLM calls on re-upload)
+    import hashlib
+    report_hash = hashlib.sha256(file_bytes if file_bytes else raw_ocr_text.encode('utf-8')).hexdigest()
+    cached_res = get_cached_extraction(report_hash)
+    if cached_res:
+        return cached_res
 
     # STEP 0: Document-type validation check (Bug R: population tables)
     is_valid_doc, rejection_signals = validate_document_type(raw_ocr_text)
@@ -1471,7 +1569,7 @@ def execute_metabolic_pipeline(raw_ocr_text: str, filename: str) -> Dict[str, An
             }
         }
 
-    # STEP 1: Extraction
+    # STEP 1: Extraction (LLM with backoff, or deterministic regex fallback)
     step1_res = step1_metabolic_extraction(raw_ocr_text)
 
     # STEP 2: Pre-generation Gate
@@ -1489,7 +1587,7 @@ def execute_metabolic_pipeline(raw_ocr_text: str, filename: str) -> Dict[str, An
             }
         }
 
-    # STEP 3: Risk Scoring & Classification
+    # STEP 3: Risk Scoring & Classification (deterministic ADA & WHO Asian clinical engine)
     step3_res = step3_metabolic_risk_scoring(verified_json)
 
     # STEP 4: Post-generation Audit Gate
@@ -1499,16 +1597,22 @@ def execute_metabolic_pipeline(raw_ocr_text: str, filename: str) -> Dict[str, An
     # Kept strictly as a separate, complementary layer without merging into clinical thresholds
     pima_population_model = None
     try:
-        from pima_model_service import predict_pima_diabetes_with_shap
+        try:
+            from pima_model_service import predict_pima_diabetes_with_shap
+        except ImportError:
+            from ml_service.pima_model_service import predict_pima_diabetes_with_shap
         pima_population_model = predict_pima_diabetes_with_shap(verified_json)
     except Exception as pe:
-        logger.exception(f"Pima population model inference failed: {pe}")
+        logger.warning(f"Pima population model inference notice: {pe}")
 
-    return {
+    pipeline_result = {
         "success": audit_res["audit_passed"],
         "pipeline_version": "metabolic_v1_ada_who",
         "pipeline_status": "APPROVED" if audit_res["audit_passed"] else "BLOCKED_FOR_REVIEW",
         "filename": filename,
+        "fallback_used": step1_res.get("fallback_used", False),
+        "extraction_method": step1_res.get("extraction_method", "llm"),
+        "fallback_reason": step1_res.get("fallback_reason"),
         "step1_extraction": step1_res,
         "step2_verified_json": verified_json,
         "step3_risk_scoring": step3_res,
@@ -1537,3 +1641,7 @@ def execute_metabolic_pipeline(raw_ocr_text: str, filename: str) -> Dict[str, An
             "sex": verified_json.get("sex")
         }
     }
+
+    # Store in memory cache
+    set_cached_extraction(report_hash, pipeline_result)
+    return pipeline_result

@@ -100,24 +100,35 @@ def call_llm(system_prompt: str, user_prompt: str, expected_json: bool = True) -
     openai_key = os.environ.get("OPENAI_API_KEY")
 
     if gemini_key:
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=gemini_key)
-            model = genai.GenerativeModel(
-                model_name="gemini-1.5-flash",
-                generation_config={"response_mime_type": "application/json"} if expected_json else None
-            )
-            prompt = f"{system_prompt}\n\nUser Input:\n{user_prompt}"
-            response = model.generate_content(prompt)
-            if response and response.text:
-                cleaned = response.text.strip()
-                if cleaned.startswith("```json"):
-                    cleaned = cleaned[7:]
-                if cleaned.endswith("```"):
-                    cleaned = cleaned[:-3]
-                return json.loads(cleaned.strip())
-        except Exception as e:
-            logger.warning(f"Gemini API call warning: {e}")
+        candidate_models = ["gemini-2.5-flash-lite", "gemini-2.5-flash"]
+        for model_name in candidate_models:
+            try:
+                import google.generativeai as genai
+                genai.configure(api_key=gemini_key)
+                model = genai.GenerativeModel(
+                    model_name=model_name,
+                    generation_config={"response_mime_type": "application/json"} if expected_json else None
+                )
+                prompt = f"{system_prompt}\n\nUser Input:\n{user_prompt}"
+                response = model.generate_content(prompt)
+                if response and response.text:
+                    cleaned = response.text.strip()
+                    if cleaned.startswith("```json"):
+                        cleaned = cleaned[7:]
+                    if cleaned.endswith("```"):
+                        cleaned = cleaned[:-3]
+                    return json.loads(cleaned.strip())
+            except Exception as e:
+                err_str = str(e)
+                if "404" in err_str or "not found" in err_str.lower():
+                    logger.warning(f"Gemini API model {model_name} not found (404), skipping to next candidate: {e}")
+                    continue
+                elif "429" in err_str or "quota" in err_str.lower() or "resourceexhausted" in err_str.lower():
+                    logger.warning(f"Gemini API rate-limited on {model_name}, trying next candidate: {e}")
+                    continue
+                else:
+                    logger.warning(f"Gemini API call warning on {model_name}: {e}")
+                    break
 
     if openai_key:
         try:

@@ -63,6 +63,24 @@ app.use('/api/recommendations', recommendationRoutes);
 app.use('/api/wellness', wellnessRoutes);
 
 // Health check endpoints with ML service pre-warming for Render free-tier cold-starts
+async function checkMlHealth() {
+  const axios = require('axios');
+  const isProduction = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true';
+  const fastApiUrl = process.env.FASTAPI_URL ? process.env.FASTAPI_URL.trim() : (isProduction ? null : 'http://127.0.0.1:8000');
+  if (!fastApiUrl) {
+    return 'unconfigured';
+  }
+  const cleanUrl = fastApiUrl.replace(/\/+$/, '');
+  try {
+    const mlRes = await axios.get(`${cleanUrl}/health`, { timeout: 8000 });
+    return mlRes.data?.status || 'healthy';
+  } catch (err) {
+    // Fire a non-blocking background wake-up request to help spin up the Render container
+    axios.get(`${cleanUrl}/health`, { timeout: 60000 }).catch(() => {});
+    return 'warming_up';
+  }
+}
+
 app.get('/', (req, res) => {
   res.json({
     status: 'ok',
@@ -71,21 +89,23 @@ app.get('/', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+// Lightweight GET /health endpoint for Render health checks and external pings
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-app.get('/api/health', async (req, res) => {
-  const axios = require('axios');
-  const fastApiUrl = process.env.FASTAPI_URL || 'http://127.0.0.1:8000';
-  let mlStatus = 'unknown';
-  try {
-    const mlRes = await axios.get(`${fastApiUrl}/health`, { timeout: 3500 });
-    mlStatus = mlRes.data?.status || 'healthy';
-  } catch (err) {
-    mlStatus = 'warming_up';
-  }
+  // Non-blocking trigger to pre-warm ML container in background
+  checkMlHealth().catch(() => {});
   res.json({
     status: 'ok',
+    service: 'lifemap-backend-qbei',
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/api/health', async (req, res) => {
+  const mlStatus = await checkMlHealth();
+  res.json({
+    status: 'ok',
+    service: 'lifemap-backend-qbei',
     ml_service: mlStatus,
     timestamp: new Date().toISOString()
   });

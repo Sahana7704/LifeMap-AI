@@ -4,14 +4,23 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
 
-# Load Indian Food Nutrition Dataset
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data")
-NUTRITION_CSV = os.path.join(DATA_DIR, "Indian_Food_Nutrition_Processed.csv")
+from pathlib import Path
+
+# Load Indian Food Nutrition Dataset (robust resolution using pathlib relative to current file)
+_BASE_DIR = Path(__file__).resolve().parent
+_CANDIDATE_PATHS = [
+    _BASE_DIR / "data" / "Indian_Food_Nutrition_Processed.csv",
+    _BASE_DIR.parent / "data" / "Indian_Food_Nutrition_Processed.csv",
+    Path.cwd() / "data" / "Indian_Food_Nutrition_Processed.csv",
+    Path.cwd() / "ml_service" / "data" / "Indian_Food_Nutrition_Processed.csv",
+    _BASE_DIR / "Indian_Food_Nutrition_Processed.csv"
+]
+NUTRITION_CSV = str(next((p for p in _CANDIDATE_PATHS if p.is_file()), _CANDIDATE_PATHS[0]))
 
 try:
     if os.path.exists(NUTRITION_CSV):
         nutrition_df = pd.read_csv(NUTRITION_CSV)
-        print(f"Loaded Indian Food Nutrition dataset: {len(nutrition_df)} food items.")
+        print(f"Loaded Indian Food Nutrition dataset: {len(nutrition_df)} food items from {NUTRITION_CSV}")
     else:
         nutrition_df = None
         print(f"Warning: {NUTRITION_CSV} not found.")

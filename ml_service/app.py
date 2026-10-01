@@ -42,9 +42,10 @@ def root():
 def health_check():
     return {
         "status": "healthy",
+        "service": "lifemap-ai-hbmn",
         "models_loaded": {
-            "diabetes": diabetes_bundle is not None,
-            "heart": heart_bundle is not None
+            "diabetes": diabetes_bundle is not None if 'diabetes_bundle' in globals() else False,
+            "heart": heart_bundle is not None if 'heart_bundle' in globals() else False
         }
     }
 
@@ -299,7 +300,7 @@ def extract_metabolic_report(file: UploadFile = File(...)):
             raw_text = extract_text_from_image(content)
 
         from metabolic_pipeline import execute_metabolic_pipeline
-        result = execute_metabolic_pipeline(raw_text, filename)
+        result = execute_metabolic_pipeline(raw_text, filename, file_bytes=content)
         if result.get("pipeline_status") == "REJECTED_NON_PATIENT_DOCUMENT":
             raise HTTPException(
                 status_code=422,

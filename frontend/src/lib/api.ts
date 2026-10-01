@@ -1,15 +1,38 @@
 import axios from 'axios';
 
 export function getApiBaseUrl(): string {
+  // 1. Explicit NEXT_PUBLIC_API_URL takes precedence if configured
+  const envUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
+  if (envUrl && envUrl !== '') {
+    let clean = envUrl.replace(/\/+$/, '');
+    if (!clean.endsWith('/api')) {
+      clean = `${clean}/api`;
+    }
+    return clean;
+  }
+
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // In production, prohibit hardcoded localhost fallback
+  if (isProduction) {
+    if (typeof window !== 'undefined') {
+      return '/api';
+    }
+    throw new Error('NEXT_PUBLIC_API_URL environment variable is required in production with no localhost fallback.');
+  }
+
+  // 2. Local development fallback
   if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
     return 'http://localhost:5000/api';
   }
-  let url = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
-  url = url.trim().replace(/\/+$/, '');
-  if (!url.endsWith('/api')) {
-    url = `${url}/api`;
+
+  // 3. Browser on local network
+  if (typeof window !== 'undefined') {
+    return '/api';
   }
-  return url;
+
+  // 4. Local SSR development fallback
+  return 'http://127.0.0.1:5000/api';
 }
 
 export const API_URL = getApiBaseUrl();

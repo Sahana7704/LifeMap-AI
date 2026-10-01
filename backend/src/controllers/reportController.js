@@ -585,10 +585,29 @@ async function uploadReport(req, res) {
         risk_score: null
       });
     }
+    const isColdStart = (
+      err.response?.status === 502 ||
+      err.response?.status === 503 ||
+      err.response?.status === 504 ||
+      err.code === 'ECONNREFUSED' ||
+      err.code === 'ETIMEDOUT' ||
+      err.code === 'ECONNRESET' ||
+      (err.message && (err.message.includes('502') || err.message.includes('503') || err.message.includes('504') || err.message.toLowerCase().includes('timeout') || err.message.toLowerCase().includes('network')))
+    );
+    if (isColdStart) {
+      return res.status(503).json({
+        error: 'The AI extraction engine was waking up from sleep (Render free tier cold start).',
+        details: err.message,
+        retryable: true,
+        code: 'COLD_START'
+      });
+    }
     if (err.response?.status === 429 || (err.message && err.message.includes('429'))) {
       return res.status(429).json({
         error: 'The AI extraction engine is temporarily rate-limited or cooling down.',
-        details: 'Render or AI service rate limit reached. Please wait 15–20 seconds and click Upload again.'
+        details: 'Render or AI service rate limit reached. Please wait 15–20 seconds and retry.',
+        retryable: true,
+        code: 'RATE_LIMIT'
       });
     }
     const detailMsg = err.response?.data?.detail || err.response?.data?.error || err.message;
@@ -1082,6 +1101,10 @@ async function uploadMetabolicReport(req, res) {
       filename: originalname,
       pipeline_version: 'metabolic_v1_ada_who',
       pipeline_status: 'APPROVED',
+      fallback_used: Boolean(ocrResult.fallback_used),
+      extraction_method: ocrResult.extraction_method || 'llm',
+      fallback_reason: ocrResult.fallback_reason || null,
+      cached: Boolean(ocrResult.cached),
       extracted_metrics: enrichedMetrics,
       diabetes_assessment: diabetesAss,
       obesity_assessment: obesityAss,
@@ -1105,10 +1128,32 @@ async function uploadMetabolicReport(req, res) {
         pipeline_status: isRejection ? 'REJECTED_NON_PATIENT_DOCUMENT' : 'HARD_STOP_PRE_GENERATION'
       });
     }
+    const isColdStart = (
+      err.response?.status === 502 ||
+      err.response?.status === 503 ||
+      err.response?.status === 504 ||
+      err.code === 'ECONNREFUSED' ||
+      err.code === 'ETIMEDOUT' ||
+      err.code === 'ECONNRESET' ||
+      (err.message && (err.message.includes('502') || err.message.includes('503') || err.message.includes('504') || err.message.toLowerCase().includes('timeout') || err.message.toLowerCase().includes('network')))
+    );
+    if (isColdStart) {
+      return res.status(503).json({
+        error: 'The AI metabolic extraction engine was waking up from sleep (Render free tier cold start).',
+        details: err.message,
+        retryable: true,
+        code: 'COLD_START'
+      });
+    }
     if (err.response?.status === 429 || (err.message && err.message.includes('429'))) {
+      const retryAfter = 15;
+      res.set('Retry-After', String(retryAfter));
       return res.status(429).json({
         error: 'The AI metabolic extraction engine is temporarily rate-limited or cooling down.',
-        details: 'Rate limit (429) hit during microservice processing. Please wait 15–20 seconds and click Upload again.'
+        details: 'Rate limit (429) hit during microservice processing. Please wait 15–20 seconds and retry.',
+        retry_after: retryAfter,
+        retryable: false,
+        code: 'RATE_LIMIT'
       });
     }
     return res.status(500).json({ error: 'Failed to process metabolic report', details: err.message });
