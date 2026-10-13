@@ -25,17 +25,28 @@ app.use((req, res, next) => {
   next();
 });
 
-// CORS — restricted strictly to FRONTEND_ORIGIN env var
-const frontendOriginEnv = process.env.FRONTEND_ORIGIN || process.env.ALLOWED_ORIGIN || 'http://localhost:3000';
-const allowedOrigins = frontendOriginEnv.split(',').map(o => o.trim());
+// CORS — supports FRONTEND_ORIGIN env var, Vercel deployments (*.vercel.app), Render, and localhost
+const frontendOriginEnv = process.env.FRONTEND_ORIGIN || process.env.ALLOWED_ORIGIN || '';
+const customOrigins = frontendOriginEnv ? frontendOriginEnv.split(',').map(o => o.trim()).filter(Boolean) : [];
 
 const corsOptions = {
   origin: (origin, callback) => {
+    // Allow non-browser requests (curl, mobile apps, Postman)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+    
+    // Allow configured origins, all Vercel previews/production, Render, and local development
+    if (
+      customOrigins.includes('*') ||
+      customOrigins.includes(origin) ||
+      origin.endsWith('.vercel.app') ||
+      origin.includes('vercel.app') ||
+      origin.includes('onrender.com') ||
+      origin.includes('localhost') ||
+      origin.includes('127.0.0.1')
+    ) {
       return callback(null, true);
     }
-    return callback(new Error(`CORS blocked: origin ${origin} is not allowed`));
+    return callback(null, false);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
