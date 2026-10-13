@@ -669,6 +669,32 @@ async function getLatestPrediction(req, res) {
       };
     }
 
+    // Merge diabetes_tier_prediction from latest medical report if available
+    try {
+      const repRes = await db.query(
+        'SELECT extracted_metrics FROM medical_reports WHERE user_id = $1 ORDER BY upload_date DESC LIMIT 1',
+        [userId]
+      );
+      if (repRes.rows.length > 0) {
+        const rawM = repRes.rows[0].extracted_metrics;
+        const parsedM = typeof rawM === 'string' ? JSON.parse(rawM) : rawM;
+        if (parsedM?.diabetes_tier_prediction) {
+          formatted.diabetes_tier_prediction = parsedM.diabetes_tier_prediction;
+          if (parsedM.data_used) formatted.data_used = parsedM.data_used;
+          if (parsedM.step4_audit) formatted.step4_audit = parsedM.step4_audit;
+          if (formatted.predictions?.diabetes) {
+            formatted.predictions.diabetes.raw_probability = parsedM.diabetes_tier_prediction.predicted_probability;
+            formatted.predictions.diabetes.model_probability = parsedM.diabetes_tier_prediction.model_probability;
+            formatted.predictions.diabetes.risk_score = Math.round(parsedM.diabetes_tier_prediction.predicted_probability * 100);
+            formatted.predictions.diabetes.category = parsedM.diabetes_tier_prediction.final_risk_level;
+            formatted.predictions.diabetes.model_used = parsedM.diabetes_tier_prediction.model_used;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Notice: Error merging latest report tier prediction:', e.message);
+    }
+
     return res.json(formatted);
   } catch (err) {
     return res.status(500).json({ error: 'Failed to fetch latest prediction', details: err.message });

@@ -117,7 +117,7 @@ export default function DashboardPage() {
   }
 
   // Model & Prediction outputs
-  const tierPrediction = data?.diabetes_tier_prediction || null;
+  const tierPrediction = data?.diabetes_tier_prediction || repMetrics?.diabetes_tier_prediction || null;
   const diabetesPred = data?.predictions?.diabetes || null;
   const modelUsed = tierPrediction?.model_used || diabetesPred?.model_used || (hba1cVal ? 'tier2_with_hba1c' : 'tier1_no_labs');
   const probRaw = tierPrediction?.model_probability ?? tierPrediction?.predicted_probability ?? diabetesPred?.model_probability ?? diabetesPred?.raw_probability ?? (diabetesPred?.risk_score != null ? diabetesPred.risk_score / 100 : null);
