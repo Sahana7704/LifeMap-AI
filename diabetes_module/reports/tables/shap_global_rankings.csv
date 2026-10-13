@@ -1,0 +1,11 @@
+Rank,Feature,Mean_Abs_SHAP
+1,Age (years),1.0149201
+2,Family History of Diabetes,0.6761575
+3,BMI (kg/m^2),0.35118693
+4,Told High Blood Pressure,0.3384695
+5,Told High Cholesterol,0.25763538
+6,Diastolic BP (mmHg),0.14860629
+7,Physically Active,0.140192
+8,Systolic BP (mmHg),0.10988538
+9,"Sex (Male=1, Female=0)",0.10440978
+10,Smoker (>=100 Cigs),0.009898341

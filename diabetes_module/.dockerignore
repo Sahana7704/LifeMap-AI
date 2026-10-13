@@ -1,0 +1,17 @@
+data/
+*venv*/
+.venv*/
+node_modules/
+.next/
+notebooks/
+reports/
+experiments/
+.git/
+archive/
+archive*/
+.env*
+*.env
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info

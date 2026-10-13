@@ -1,0 +1,6 @@
+Model,Accuracy,Precision,Recall,F1,ROC-AUC
+Logistic Regression,0.741,0.332,0.84,0.476,0.858
+Random Forest,0.743,0.333,0.829,0.475,0.853
+XGBoost,0.762,0.351,0.826,0.493,0.858
+MLP (Deep Learning),0.757,0.349,0.848,0.495,0.857
+Stacking Ensemble (Hybrid),0.754,0.344,0.826,0.485,0.861

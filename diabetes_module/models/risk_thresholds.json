@@ -1,0 +1,25 @@
+{
+  "threshold_low": 0.15,
+  "threshold_high": 0.4,
+  "decision_threshold": 0.14,
+  "risk_summary": [
+    {
+      "risk_level": "Low",
+      "n_patients": 1762,
+      "share_of_test": 0.6722624952308279,
+      "observed_diabetes_rate": 0.03688989784335982
+    },
+    {
+      "risk_level": "Moderate",
+      "n_patients": 561,
+      "share_of_test": 0.21404044257916827,
+      "observed_diabetes_rate": 0.26559714795008915
+    },
+    {
+      "risk_level": "High",
+      "n_patients": 298,
+      "share_of_test": 0.11369706219000382,
+      "observed_diabetes_rate": 0.5167785234899329
+    }
+  ]
+}

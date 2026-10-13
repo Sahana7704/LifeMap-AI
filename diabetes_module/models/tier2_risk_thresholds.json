@@ -1,0 +1,30 @@
+{
+  "model_version": "Tier 2 Lab-Augmented (NHANES + HbA1c)",
+  "decision_threshold": 0.29000000000000004,
+  "high_accuracy_threshold": 0.376,
+  "threshold_low": 0.15,
+  "threshold_high": 0.4,
+  "risk_summary": [
+    {
+      "tier": "Low Risk",
+      "range": "< 0.15",
+      "count": 1983,
+      "share_of_test": 0.8290133779264214,
+      "observed_diabetes_rate": 0.029752899646999495
+    },
+    {
+      "tier": "Moderate Risk",
+      "range": "0.15 - 0.40",
+      "count": 102,
+      "share_of_test": 0.042642140468227424,
+      "observed_diabetes_rate": 0.35294117647058826
+    },
+    {
+      "tier": "High Risk",
+      "range": ">= 0.40",
+      "count": 307,
+      "share_of_test": 0.12834448160535117,
+      "observed_diabetes_rate": 0.8045602605863192
+    }
+  ]
+}

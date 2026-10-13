@@ -1,0 +1,3 @@
+Mode,Threshold,Accuracy,Precision,Recall,Specificity,F1
+High-Accuracy Mode (Standard),0.376,0.935,0.805,0.722,0.971,0.761
+Screening Mode (80% Recall),0.29,0.923,0.692,0.827,0.939,0.754

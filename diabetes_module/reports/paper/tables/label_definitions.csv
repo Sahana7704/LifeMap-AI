@@ -1,0 +1,7 @@
+DIQ010 Code,NHANES Label Meaning,Count,% Total,Modeling Assignment
+1.0,Doctor diagnosed diabetes (Yes),2449,13.64%,Class 1 (Diabetic)
+2.0,No diabetes diagnosis (No),15019,83.62%,Class 0 (Non-Diabetic)
+3.0,Borderline / Prediabetes,482,2.68%,Excluded (Indeterminate)
+7.0,Refused to answer,0,0.00%,Excluded
+9.0,Don't know,11,0.06%,Excluded
+Missing,Unanswered / Not recorded,0,0.00%,Excluded

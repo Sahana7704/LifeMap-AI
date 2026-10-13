@@ -3,15 +3,32 @@ const router = express.Router();
 const multer = require('multer');
 const reportController = require('../controllers/reportController');
 const { requireAuth } = require('../middleware/auth');
+const { uploadRateLimiter } = require('../middleware/rateLimiter');
 
 const storage = multer.memoryStorage();
+const fileFilter = (req, file, cb) => {
+  const allowedMimeTypes = ['application/pdf', 'image/png', 'image/jpeg', 'image/jpg'];
+  const ext = (file.originalname || '').toLowerCase();
+  const allowedExtensions = ['.pdf', '.png', '.jpg', '.jpeg'];
+  const isValidMime = allowedMimeTypes.includes(file.mimetype);
+  const isValidExt = allowedExtensions.some(e => ext.endsWith(e));
+
+  if (isValidMime || isValidExt) {
+    cb(null, true);
+  } else {
+    cb(new Error('Invalid file type. Only PDF, PNG, and JPEG documents are permitted.'), false);
+  }
+};
+
 const upload = multer({
   storage,
-  limits: { fileSize: 25 * 1024 * 1024 } // 25 MB max limit
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB max limit
+  fileFilter
 });
 
 const handleUpload = [
   requireAuth,
+  uploadRateLimiter,
   (req, res, next) => {
     upload.single('report')(req, res, (err) => {
       if (err) {
@@ -26,6 +43,7 @@ const handleUpload = [
 
 const handleMetabolicUpload = [
   requireAuth,
+  uploadRateLimiter,
   (req, res, next) => {
     upload.single('report')(req, res, (err) => {
       if (err) {

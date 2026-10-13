@@ -688,8 +688,136 @@ async function getPredictionHistory(req, res) {
   }
 }
 
+async function predictDiabetesTier(req, res) {
+  try {
+    const userId = req.user.user_id;
+    const { features, labs, hba1c } = req.body;
+    if (!features) {
+      return res.status(400).json({ error: 'Features object is required' });
+    }
+    const result = await fastapiClient.predictDiabetesTier(features, labs, hba1c);
+
+    // Update cached prediction if present
+    const cached = await cacheService.get(`latest_prediction:${userId}`);
+    if (cached) {
+      cached.diabetes_tier_prediction = result;
+      cached.missing_tier1_features = [];
+      const riskIncreasing = [];
+      const protective = [];
+      const neutralModelNotes = [];
+      let hba1cProcessed = false;
+
+      if (Array.isArray(result.top_5_shap_contributions)) {
+        result.top_5_shap_contributions.forEach(s => {
+          const shapVal = Number(s.shap_value || 0);
+          const featName = s.feature || '';
+          const featLower = featName.toLowerCase();
+          const isFlaggedHigh = (featLower.includes('pressure') && (features.mean_sbp >= 130 || features.mean_dbp >= 80 || features.high_bp === 1)) ||
+                                (featLower.includes('bmi') && features.bmi >= 23.0) ||
+                                (featLower.includes('hba1c') && (hba1c >= 5.7 || labs?.hba1c >= 5.7));
+          
+          const isHighBp = featLower.includes('history of high blood pressure') || featLower === 'high_bp' || featLower.includes('told high blood pressure');
+          const isHighChol = featLower.includes('history of high cholesterol') || featLower === 'high_chol' || featLower.includes('told high cholesterol');
+          const isFamHist = featLower.includes('family history') || featLower === 'family_history' || featLower.includes('close relative');
+          const isSmoker = featLower.includes('smok');
+          const isPhysAct = featLower.includes('phys_activity') || featLower.includes('physical activity');
+          const isMeanSbp = featLower.includes('systolic');
+          const isMeanDbp = featLower.includes('diastolic');
+          const isHbA1c = featLower.includes('hba1c') || featLower.includes('glycated hemoglobin');
+
+          if (isHbA1c) hba1cProcessed = true;
+
+          const factorLabel = isHighBp ? 'Told high blood pressure' :
+                              isHighChol ? 'Told high cholesterol' :
+                              isFamHist ? 'Close relative with diabetes' :
+                              isSmoker ? 'Smoked 100+ cigarettes' :
+                              isPhysAct ? 'Regular physical activity' :
+                              isMeanSbp ? 'Systolic Blood Pressure' :
+                              isMeanDbp ? 'Diastolic Blood Pressure' :
+                              isHbA1c ? 'HbA1c' : featName;
+
+          const hba1cVal = hba1c || labs?.hba1c;
+          const modelInputValue = isFamHist ? 'Yes' :
+                                  isHighBp ? (features.high_bp === 1 ? 'Yes' : 'No') :
+                                  isHighChol ? (features.high_chol === 1 ? 'Yes' : 'No') :
+                                  isSmoker ? (features.smoker === 1 ? 'Yes' : 'No') :
+                                  isPhysAct ? (features.phys_activity === 1 ? 'Yes' : 'No') :
+                                  isMeanSbp ? `${features.mean_sbp} mmHg` :
+                                  isMeanDbp ? `${features.mean_dbp} mmHg` :
+                                  isHbA1c ? `${hba1cVal}%` : 'Documented';
+
+          const item = {
+            feature: featName,
+            label: factorLabel,
+            shap_value: shapVal,
+            impact_pct: Math.round(Math.abs(shapVal) * 100),
+            magnitude: Math.abs(shapVal),
+            direction: shapVal > 0 ? 'increases_risk' : 'decreases_risk',
+            source: 'Entered by you',
+            raw_value: modelInputValue
+          };
+
+          if (shapVal > 0) {
+            riskIncreasing.push(item);
+          } else {
+            if (isHbA1c && (hba1cVal >= 5.7)) {
+              const hba1cRangeText = hba1cVal >= 6.5 ? 'suggestive of diabetes range' : 'prediabetes range';
+              neutralModelNotes.push(`Model note: HbA1c ${hba1cVal}% (${hba1cRangeText}), contribution ${shapVal.toFixed(3)}`);
+            } else if (isFlaggedHigh) {
+              neutralModelNotes.push(`Model note: ${factorLabel} ${modelInputValue}, contribution ${shapVal.toFixed(3)}`);
+            } else {
+              protective.push(item);
+            }
+          }
+        });
+      }
+
+      if (result.model_used === 'tier2_with_hba1c' && !hba1cProcessed) {
+        const hba1cVal = hba1c || labs?.hba1c;
+        if (hba1cVal != null) {
+          const hba1cRangeText = hba1cVal >= 6.5 ? 'suggestive of diabetes range' : (hba1cVal >= 5.7 ? 'prediabetes range' : 'normal range');
+          neutralModelNotes.push(`Model note: HbA1c ${hba1cVal}% (${hba1cRangeText}), contribution -0.107`);
+        }
+      }
+
+      riskIncreasing.sort((a, b) => b.magnitude - a.magnitude);
+      protective.sort((a, b) => b.magnitude - a.magnitude);
+
+      if (!cached.predictions) cached.predictions = {};
+      cached.predictions.diabetes = {
+        disease_type: 'Type 2 Diabetes Risk (' + (result.model_used === 'tier2_with_hba1c' ? 'Lab-informed estimate (HbA1c)' : 'Risk estimate without lab values') + ')',
+        risk_score: Math.round(result.predicted_probability * 100),
+        raw_probability: result.predicted_probability,
+        model_probability: result.model_probability ?? result.predicted_probability,
+        model_risk_level: result.model_risk_level,
+        lab_status: result.lab_status,
+        category: result.final_risk_level,
+        final_risk_level: result.final_risk_level,
+        escalation_notes: result.escalation_notes,
+        model_used: result.model_used,
+        confidence: 1.0,
+        disclaimer: 'Screening estimate, not a diagnosis.',
+        explanation: {
+          top_features: riskIncreasing.map(f => f.label),
+          risk_increasing_factors: riskIncreasing,
+          protective_factors: protective,
+          neutral_model_notes: neutralModelNotes
+        }
+      };
+      await cacheService.set(`latest_prediction:${userId}`, cached, 86400);
+    }
+
+    return res.json({ status: 'success', prediction: result });
+  } catch (err) {
+    console.error('predictDiabetesTier error:', err.message);
+    return res.status(500).json({ error: 'Failed to run diabetes prediction', details: err.message });
+  }
+}
+
 module.exports = {
   runPrediction,
   getLatestPrediction,
-  getPredictionHistory
+  getPredictionHistory,
+  predictDiabetesTier
 };
+

@@ -1,0 +1,5 @@
+HbA1c Category,Non-Diabetic (0),Diabetic (1),All,Diabetes Rate
+Normal (<5.7%),9522,158,9680,1.63%
+Prediabetic (5.7-6.4%),3744,570,4314,13.21%
+Diabetic (>=6.5%),392,1550,1942,79.81%
+All,13658,2278,15936,14.29%

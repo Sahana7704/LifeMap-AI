@@ -1,0 +1,3 @@
+Comparison,Group A (TP) N,Group A Age (BMI),Group A % BP (% FamHist),Group B (FN) N,Group B Age (BMI),Group B % BP (% FamHist),Group A (TN) N,Group B (FP) N
+Diabetic Cases (TP vs FN),303,65.2 (33.2),81.5% (81.1%),65,49.8 (31.3),29.7% (31.1%),,
+Healthy Cases (TN vs FP),,39.7 (27.7),16.1% (29.6%),,63.6 (31.5),69.2% (67.0%),1697,556

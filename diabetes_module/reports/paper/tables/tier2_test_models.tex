@@ -1,0 +1,13 @@
+\begin{tabular}{lrrrrr}
+\toprule
+Model & Accuracy & Precision & Recall & F1 & ROC-AUC \\
+\midrule
+Baseline: Predict everyone healthy & 0.857000 & 0.000000 & 0.000000 & 0.000000 & 0.500000 \\
+Baseline: HbA1c >= 6.5% rule & 0.932000 & 0.806000 & 0.693000 & 0.745000 & 0.833000 \\
+Logistic Regression & 0.910000 & 0.638000 & 0.851000 & 0.729000 & 0.944000 \\
+Random Forest & 0.918000 & 0.671000 & 0.833000 & 0.743000 & 0.949000 \\
+XGBoost & 0.923000 & 0.692000 & 0.827000 & 0.754000 & 0.949000 \\
+MLP (Deep Learning) & 0.921000 & 0.679000 & 0.842000 & 0.752000 & 0.950000 \\
+Stacking Ensemble (Hybrid) & 0.917000 & 0.666000 & 0.839000 & 0.743000 & 0.951000 \\
+\bottomrule
+\end{tabular}

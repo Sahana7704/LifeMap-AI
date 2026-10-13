@@ -1,0 +1,13 @@
+\begin{tabular}{lllll}
+\toprule
+Comparison Pair & ROC-AUC Difference & 95% CI & p-value & Interval Includes 0? \\
+\midrule
+Tier 1: Stacking vs XGBoost & +0.004 & [-0.000, +0.008] & 0.060 & Yes (Not Sig) \\
+Tier 1: XGBoost vs Logistic Regression & +0.000 & [-0.007, +0.007] & 0.966 & Yes (Not Sig) \\
+Tier 1: MLP vs XGBoost & -0.000 & [-0.005, +0.005] & 0.966 & Yes (Not Sig) \\
+Tier 2: Stacking vs XGBoost & +0.002 & [-0.002, +0.006] & 0.254 & Yes (Not Sig) \\
+Tier 2: XGBoost vs Logistic Regression & +0.005 & [-0.002, +0.012] & 0.208 & Yes (Not Sig) \\
+Tier 2: MLP vs XGBoost & +0.002 & [-0.002, +0.006] & 0.370 & Yes (Not Sig) \\
+Tier 2 vs Tier 1 (Identical Rows) & +0.094 & [+0.077, +0.113] & 0.001 & No (Stat Sig) \\
+\bottomrule
+\end{tabular}

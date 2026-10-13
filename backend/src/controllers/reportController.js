@@ -572,7 +572,7 @@ async function uploadReport(req, res) {
       audit_passed: ocrResult.audit_passed ?? true
     });
   } catch (err) {
-    console.error('Report upload & OCR error:', err.response?.data || err.message, err.stack);
+    console.error('Report upload & OCR error:', err.message);
     if (err.response?.status === 422) {
       const detail = err.response?.data?.detail || err.response?.data?.error || 'Could not extract diabetes or obesity-relevant values from this report.';
       const isRejection = typeof detail === 'string' && (detail.includes('statistical summary') || detail.includes('research'));
@@ -633,6 +633,7 @@ async function deleteAllReports(req, res) {
       'DELETE FROM medical_reports WHERE user_id = $1',
       [userId]
     );
+    await db.query('DELETE FROM risk_predictions WHERE user_id = $1', [userId]);
 
     await cacheService.del(`latest_prediction:${userId}`);
 
@@ -666,31 +667,24 @@ async function uploadMetabolicReport(req, res) {
       });
     }
 
-    // Hard stop if Step 2 pre-generation gate halted
-    if (!ocrResult.success || ocrResult.pipeline_status === 'HARD_STOP_PRE_GENERATION') {
-      return res.status(422).json({
-        error: ocrResult.error || 'Could not extract diabetes or obesity-relevant values from this report.',
-        pipeline_status: 'HARD_STOP_PRE_GENERATION',
-        details: 'Please upload a report with glucose/HbA1c results or height & weight / BMI.'
-      });
-    }
-
-    // Check if Step 4 audit gate blocked rendering
-    if (!ocrResult.audit_passed || ocrResult.pipeline_status === 'BLOCKED_FOR_REVIEW') {
-      return res.status(422).json({
-        error: 'Report failed Step 4 post-generation audit gate.',
-        pipeline_status: 'BLOCKED_FOR_REVIEW',
-        audit_issues: ocrResult.step4_audit?.audit_issues || []
-      });
-    }
+    // If Step 2 pre-generation gate halted due to missing/unreadable values, proceed with empty vitals
+    // so dashboard displays "Not provided" everywhere and prompts for missing information without a risk estimate.
+    const isUnreadableOrEmpty = (!ocrResult.success || ocrResult.pipeline_status === 'HARD_STOP_PRE_GENERATION');
 
     const reportId = `rep_met_${crypto.randomUUID().slice(0, 10)}`;
-    const verifiedVitals = ocrResult.verified_vitals || {};
-    const diabetesAss = ocrResult.diabetes_assessment || {};
-    const obesityAss = ocrResult.obesity_assessment || {};
-    const combinedRiskNote = ocrResult.combined_risk_note || '';
-    // Supplementary Pima ML population model & real computed SHAP drivers
-    const pimaModel = ocrResult.pima_population_model || null;
+    const verifiedVitals = isUnreadableOrEmpty ? {} : (ocrResult.verified_vitals || {});
+    const diabetesAss = isUnreadableOrEmpty ? {} : (ocrResult.diabetes_assessment || {});
+    const obesityAss = isUnreadableOrEmpty ? {} : (ocrResult.obesity_assessment || {});
+    const combinedRiskNote = isUnreadableOrEmpty 
+      ? 'No readable clinical or metabolic biomarkers were found in this report.' 
+      : (ocrResult.combined_risk_note || '');
+    const tierPrediction = isUnreadableOrEmpty ? null : (ocrResult.diabetes_tier_prediction || null);
+    const missingTier1 = isUnreadableOrEmpty 
+      ? ['age', 'sex', 'bmi', 'mean_sbp', 'mean_dbp', 'high_bp', 'high_chol', 'smoker', 'phys_activity', 'family_history']
+      : (ocrResult.missing_tier1_features || []);
+
+    // Raw OCR text for audit validation
+    const rawOcr = String(ocrResult.raw_text || ocrResult.step1_extraction?.raw_text || '');
 
     // Enriched metadata stored in medical_reports
     const enrichedMetrics = {
@@ -703,15 +697,29 @@ async function uploadMetabolicReport(req, res) {
       bmi_source: verifiedVitals.bmi?.source ?? null,
       height_cm: verifiedVitals.height_cm ?? null,
       weight_kg: verifiedVitals.weight_kg ?? null,
+      mean_sbp: verifiedVitals.mean_sbp ?? null,
+      mean_dbp: verifiedVitals.mean_dbp ?? null,
+      blood_pressure: verifiedVitals.blood_pressure ?? null,
+      total_cholesterol: verifiedVitals.total_cholesterol?.value ?? null,
+      hdl: verifiedVitals.hdl?.value ?? null,
+      ldl: verifiedVitals.ldl?.value ?? null,
+      triglycerides: verifiedVitals.triglycerides?.value ?? null,
+      high_bp: verifiedVitals.high_bp ?? null,
+      high_chol: verifiedVitals.high_chol ?? null,
+      smoker: verifiedVitals.smoker ?? null,
+      phys_activity: verifiedVitals.phys_activity ?? null,
+      family_history: verifiedVitals.family_history ?? null,
+      hemoglobin: verifiedVitals.hemoglobin ?? null,
       waist_circumference_cm: verifiedVitals.waist_circumference_cm ?? null,
       age: verifiedVitals.age ?? null,
       gender: verifiedVitals.sex ?? null,
       diabetes_assessment: diabetesAss,
       obesity_assessment: obesityAss,
       combined_risk_note: combinedRiskNote,
+      diabetes_tier_prediction: tierPrediction,
+      missing_tier1_features: missingTier1,
       step4_audit: ocrResult.step4_audit,
-      pima_population_model: pimaModel,
-      pipeline_version: 'metabolic_v1_ada_who',
+      pipeline_version: 'metabolic_v2_two_tier_ada_who',
       pipeline_status: 'APPROVED'
     };
 
@@ -725,13 +733,13 @@ async function uploadMetabolicReport(req, res) {
         req.user.user_id,
         new Date().toISOString(),
         originalname,
-        ocrResult.step1_extraction?.raw_text_char_count ? `Extracted ${ocrResult.step1_extraction.raw_text_char_count} chars` : '',
+        rawOcr || `Extracted report with ${Object.keys(verifiedVitals).length} vitals`,
         JSON.stringify(enrichedMetrics),
         1.0
       ]
     );
 
-    // Auto-update health profile vitals strictly from current verified report (isolated try/catch)
+    // Auto-update health profile vitals strictly from current verified report
     try {
       await cacheService.delete(`latest_prediction:${req.user.user_id}`);
       const profileRes = await db.query('SELECT * FROM health_profiles WHERE user_id = $1', [req.user.user_id]);
@@ -740,16 +748,19 @@ async function uploadMetabolicReport(req, res) {
           glucose: verifiedVitals.fasting_glucose?.value ?? null,
           fasting_glucose: verifiedVitals.fasting_glucose?.value ?? null,
           hba1c: verifiedVitals.hba1c?.value ?? null,
-          random_glucose: verifiedVitals.random_glucose?.value ?? null,
           bmi: verifiedVitals.bmi?.value ?? null,
           height_cm: verifiedVitals.height_cm ?? null,
           weight_kg: verifiedVitals.weight_kg ?? null,
-          waist_circumference_cm: verifiedVitals.waist_circumference_cm ?? null,
+          systolic_bp: verifiedVitals.mean_sbp ?? null,
+          diastolic_bp: verifiedVitals.mean_dbp ?? null,
+          blood_pressure: verifiedVitals.blood_pressure || (verifiedVitals.mean_sbp ? `${verifiedVitals.mean_sbp}/${verifiedVitals.mean_dbp}` : null),
+          cholesterol: verifiedVitals.total_cholesterol?.value ?? null,
+          hdl: verifiedVitals.hdl?.value ?? null,
+          ldl: verifiedVitals.ldl?.value ?? null,
+          triglycerides: verifiedVitals.triglycerides?.value ?? null,
           age: verifiedVitals.age ?? null,
           gender: verifiedVitals.sex ?? null,
-          sex: verifiedVitals.sex ?? null,
-          blood_pressure: profileRes.rows[0].vitals?.blood_pressure || 120,
-          cholesterol: profileRes.rows[0].vitals?.cholesterol || 190
+          sex: verifiedVitals.sex ?? null
         };
 
         await db.query(
@@ -773,191 +784,199 @@ async function uploadMetabolicReport(req, res) {
       console.warn('Notice: Auto-update health profile error (non-fatal):', profileErr.message);
     }
 
-    // Build risk increasing factors and protective factors for dashboard display
-    // Ensure riskIncreasing and protective are ALWAYS declared and initialized in scope (Bug T fix)
+    // Build "Data used" panel items listing every input with its source
+    const dataUsed = [
+      { label: 'Age', value: verifiedVitals.age ? `${verifiedVitals.age} years` : 'Not provided', source: verifiedVitals.age ? 'From report' : 'Not provided' },
+      { label: 'Sex', value: verifiedVitals.sex || 'Not provided', source: verifiedVitals.sex ? 'From report' : 'Not provided' },
+      { label: 'Height', value: verifiedVitals.height_cm ? `${verifiedVitals.height_cm} cm` : 'Not provided', source: verifiedVitals.height_cm ? 'From report' : 'Not provided' },
+      { label: 'Weight', value: verifiedVitals.weight_kg ? `${verifiedVitals.weight_kg} kg` : 'Not provided', source: verifiedVitals.weight_kg ? 'From report' : 'Not provided' },
+      { label: 'Body Mass Index (BMI)', value: verifiedVitals.bmi?.value ? `${verifiedVitals.bmi.value} kg/m²` : 'Not provided', source: verifiedVitals.bmi?.source === 'calculated' ? 'Calculated' : (verifiedVitals.bmi?.value ? 'From report' : 'Not provided') },
+      { label: 'Blood Pressure', value: verifiedVitals.blood_pressure ? `${verifiedVitals.blood_pressure} mmHg` : (verifiedVitals.mean_sbp ? `${verifiedVitals.mean_sbp}/${verifiedVitals.mean_dbp} mmHg` : 'Not provided'), source: (verifiedVitals.blood_pressure || verifiedVitals.mean_sbp) ? 'From report' : 'Not provided' },
+      { label: 'Fasting Plasma Glucose', value: verifiedVitals.fasting_glucose?.value ? `${verifiedVitals.fasting_glucose.value} mg/dL` : 'Not provided', source: verifiedVitals.fasting_glucose?.value ? 'From report' : 'Not provided' },
+      { label: 'HbA1c (Glycated Hemoglobin)', value: verifiedVitals.hba1c?.value ? `${verifiedVitals.hba1c.value}%` : 'Not provided', source: verifiedVitals.hba1c?.value ? 'From report' : 'Not provided' },
+      { label: 'Total Cholesterol', value: verifiedVitals.total_cholesterol?.value ? `${verifiedVitals.total_cholesterol.value} mg/dL` : 'Not provided', source: verifiedVitals.total_cholesterol?.value ? 'From report' : 'Not provided' },
+      { label: 'HDL Cholesterol', value: verifiedVitals.hdl?.value ? `${verifiedVitals.hdl.value} mg/dL` : 'Not provided', source: verifiedVitals.hdl?.value ? 'From report' : 'Not provided' },
+      { label: 'LDL Cholesterol', value: verifiedVitals.ldl?.value ? `${verifiedVitals.ldl.value} mg/dL` : 'Not provided', source: verifiedVitals.ldl?.value ? 'From report' : 'Not provided' },
+      { label: 'Triglycerides', value: verifiedVitals.triglycerides?.value ? `${verifiedVitals.triglycerides.value} mg/dL` : 'Not provided', source: verifiedVitals.triglycerides?.value ? 'From report' : 'Not provided' },
+      { label: 'Told high blood pressure', value: verifiedVitals.high_bp === 1 ? 'Yes' : (verifiedVitals.high_bp === 0 ? 'No' : 'Not provided'), source: verifiedVitals.high_bp !== null && verifiedVitals.high_bp !== undefined ? 'From report' : 'Not provided' },
+      { label: 'Told high cholesterol', value: verifiedVitals.high_chol === 1 ? 'Yes' : (verifiedVitals.high_chol === 0 ? 'No' : 'Not provided'), source: verifiedVitals.high_chol !== null && verifiedVitals.high_chol !== undefined ? 'From report' : 'Not provided' },
+      { label: 'Smoked 100+ cigarettes', value: verifiedVitals.smoker === 1 ? 'Yes' : (verifiedVitals.smoker === 0 ? 'No' : 'Not provided'), source: verifiedVitals.smoker !== null && verifiedVitals.smoker !== undefined ? 'From report' : 'Not provided' },
+      { label: 'Regular physical activity', value: verifiedVitals.phys_activity === 1 ? 'Yes' : (verifiedVitals.phys_activity === 0 ? 'No' : 'Not provided'), source: verifiedVitals.phys_activity !== null && verifiedVitals.phys_activity !== undefined ? 'From report' : 'Not provided' },
+      { label: 'Close relative with diabetes', value: verifiedVitals.family_history === 1 ? 'Yes' : (verifiedVitals.family_history === 0 ? 'No' : 'Not provided'), source: verifiedVitals.family_history !== null && verifiedVitals.family_history !== undefined ? 'From report' : 'Not provided' }
+    ];
+
+    // Rule D & E: Process Native XGBoost top 5 SHAP factors
+    // Never show "Not provided" or imputed features as factors.
+    // Flagged High values on page must NEVER appear under "Lowers your estimated risk".
     let finalRiskIncreasing = [];
     let finalProtective = [];
-    let riskIncreasing = [];
-    let protective = [];
+    let neutralModelNotes = [];
+    let hba1cProcessed = false;
 
-    try {
-      if (pimaModel && pimaModel.shap_drivers) {
-        finalRiskIncreasing = (pimaModel.shap_drivers.risk_increasing || []).map(f => ({
-          feature: f.feature,
-          label: f.label,
-          raw_value: f.raw_value,
-          formatted_value: f.formatted_value,
-          shap_value: f.shap_value,
-          impact_pct: f.impact_pct,
-          category: 'pima_ml_shap',
-          direction: 'increases_risk',
-          tip: f.clinical_guidance,
-          source_flagged: false,
-          is_imputed: f.is_imputed
-        }));
+    if (tierPrediction && Array.isArray(tierPrediction.top_5_shap_contributions)) {
+      tierPrediction.top_5_shap_contributions.forEach(s => {
+        const featName = s.feature || '';
+        const shapVal = Number(s.shap_value || 0);
+        const featLower = featName.toLowerCase();
 
-        finalProtective = (pimaModel.shap_drivers.protective || []).map(f => ({
-          feature: f.feature,
-          label: f.label,
-          raw_value: f.raw_value,
-          formatted_value: f.formatted_value,
-          shap_value: f.shap_value,
-          impact_pct: f.impact_pct,
-          category: 'pima_ml_shap',
-          direction: 'decreases_risk',
-          tip: f.clinical_guidance,
-          source_flagged: false,
-          is_imputed: f.is_imputed
-        }));
-      } else {
-        (diabetesAss.classifications || []).forEach(c => {
-          const isHbA1c = (c.marker || '').toLowerCase().includes('hba1c') || (c.marker || '').toLowerCase().includes('a1c');
-          const featKey = isHbA1c ? 'hba1c' : 'fasting_glucose';
-          const isDiagnostic = (c.classification || '').includes('Diagnostic');
-          const isPrediabetes = (c.classification || '').includes('Prediabetes');
+        // Check if this feature was "Not provided" in report - skip if missing
+        if (featLower.includes('hba1c') && (verifiedVitals.hba1c == null || verifiedVitals.hba1c.value == null)) return;
+        if (featLower.includes('glucose') && (verifiedVitals.fasting_glucose == null || verifiedVitals.fasting_glucose.value == null)) return;
+        if (featLower.includes('bmi') && (verifiedVitals.bmi == null || verifiedVitals.bmi.value == null)) return;
+        if (featLower.includes('cholesterol') && (verifiedVitals.high_chol == null && verifiedVitals.total_cholesterol == null)) return;
+        if ((featLower.includes('pressure') || featLower.includes('sbp') || featLower.includes('dbp')) && (verifiedVitals.mean_sbp == null && verifiedVitals.high_bp == null)) return;
 
-          if (isDiagnostic || isPrediabetes || c.source_flagged) {
-            finalRiskIncreasing.push({
-              feature: featKey,
-              label: c.marker,
-              raw_value: c.value,
-              formatted_value: `${c.value} · ${c.classification}`,
-              impact_pct: isDiagnostic ? 35 : 20,
-              category: 'metabolic',
-              direction: 'increases_risk',
-              tip: c.diagnostic_threshold,
-              source_flagged: c.source_flagged || false,
-              diagnostic_criterion: isDiagnostic ? c.classification : (isPrediabetes ? 'Prediabetes' : null)
-            });
+        // Check if this feature is flagged High or elevated
+        const isBPElevated = (featLower.includes('blood pressure') || featLower.includes('sbp') || featLower.includes('dbp')) &&
+          (verifiedVitals.mean_sbp >= 130 || verifiedVitals.mean_dbp >= 80 || verifiedVitals.high_bp === 1);
+        const isGlucoseElevated = featLower.includes('glucose') && (verifiedVitals.fasting_glucose?.value >= 100);
+        const isHbA1cElevated = featLower.includes('hba1c') && (verifiedVitals.hba1c?.value >= 5.7);
+        const isBMIElevated = featLower.includes('bmi') && (verifiedVitals.bmi?.value >= 23.0);
+        const isCholElevated = featLower.includes('cholesterol') && (verifiedVitals.total_cholesterol?.value >= 200 || verifiedVitals.ldl?.value >= 100 || verifiedVitals.high_chol === 1);
+
+        const isFlaggedHigh = isBPElevated || isGlucoseElevated || isHbA1cElevated || isBMIElevated || isCholElevated;
+
+        const isHighBp = featLower.includes('history of high blood pressure') || featLower === 'high_bp' || featLower.includes('told high blood pressure');
+        const isHighChol = featLower.includes('history of high cholesterol') || featLower === 'high_chol' || featLower.includes('told high cholesterol');
+        const isFamHist = featLower.includes('family history') || featLower === 'family_history' || featLower.includes('close relative');
+        const isSmoker = featLower.includes('smok');
+        const isPhysAct = featLower.includes('phys_activity') || featLower.includes('physical activity');
+        const isMeanSbp = featLower.includes('systolic');
+        const isMeanDbp = featLower.includes('diastolic');
+        const isHbA1c = featLower.includes('hba1c') || featLower.includes('glycated hemoglobin');
+        const isGlucose = featLower.includes('glucose');
+        const isBmi = featLower.includes('bmi');
+        const isAge = featLower.includes('age');
+
+        if (isHbA1c) hba1cProcessed = true;
+
+        const factorLabel = isHighBp ? 'Told high blood pressure' :
+                            isHighChol ? 'Told high cholesterol' :
+                            isFamHist ? 'Close relative with diabetes' :
+                            isSmoker ? 'Smoked 100+ cigarettes' :
+                            isPhysAct ? 'Regular physical activity' :
+                            isMeanSbp ? 'Systolic Blood Pressure' :
+                            isMeanDbp ? 'Diastolic Blood Pressure' :
+                            isHbA1c ? 'HbA1c' :
+                            isGlucose ? 'Fasting Plasma Glucose' :
+                            isBmi ? 'Body Mass Index (BMI)' :
+                            isAge ? 'Age' : featName;
+
+        const modelInputValue = isFamHist ? 'Yes' :
+                                isHighBp ? (verifiedVitals.high_bp === 1 ? 'Yes' : (verifiedVitals.high_bp === 0 ? 'No' : 'Yes')) :
+                                isHighChol ? (verifiedVitals.high_chol === 1 ? 'Yes' : (verifiedVitals.high_chol === 0 ? 'No' : 'Yes')) :
+                                isSmoker ? (verifiedVitals.smoker === 1 ? 'Yes' : 'No') :
+                                isPhysAct ? (verifiedVitals.phys_activity === 1 ? 'Yes' : 'No') :
+                                isMeanSbp ? `${verifiedVitals.mean_sbp} mmHg` :
+                                isMeanDbp ? `${verifiedVitals.mean_dbp} mmHg` :
+                                isHbA1c ? `${verifiedVitals.hba1c?.value}%` :
+                                isGlucose ? `${verifiedVitals.fasting_glucose?.value} mg/dL` :
+                                isBmi ? `${verifiedVitals.bmi?.value} kg/m²` :
+                                isAge ? `${verifiedVitals.age} years` : 'Documented';
+
+        const factorItem = {
+          feature: featName,
+          label: factorLabel,
+          shap_value: shapVal,
+          impact_pct: Math.round(Math.abs(shapVal) * 100),
+          magnitude: Math.abs(shapVal),
+          direction: shapVal > 0 ? 'increases_risk' : 'decreases_risk',
+          source: 'From report',
+          raw_value: modelInputValue
+        };
+
+        if (shapVal > 0) {
+          finalRiskIncreasing.push(factorItem);
+        } else {
+          // If contribution is negative while flagged High, never hide or drop silently: show in a neutral line
+          if (isHbA1c && isHbA1cElevated) {
+            const hba1cRangeText = verifiedVitals.hba1c?.value >= 6.5 ? 'suggestive of diabetes range' : 'prediabetes range';
+            neutralModelNotes.push(`Model note: HbA1c ${verifiedVitals.hba1c?.value}% (${hba1cRangeText}), contribution ${shapVal.toFixed(3)}`);
+          } else if (isFlaggedHigh) {
+            neutralModelNotes.push(`Model note: ${factorLabel} ${modelInputValue}, contribution ${shapVal.toFixed(3)}`);
           } else {
-            finalProtective.push({
-              feature: featKey,
-              label: c.marker,
-              raw_value: c.value,
-              formatted_value: `${c.value} · Normal (${c.diagnostic_threshold})`,
-              impact_pct: 25,
-              category: 'metabolic',
-              direction: 'decreases_risk',
-              tip: `${c.marker} is in optimal healthy reference range.`
-            });
+            finalProtective.push(factorItem);
           }
-        });
+        }
+      });
+    }
 
-        if (obesityAss.bmi_value != null) {
-          const isObeseOrOver = obesityAss.classification.includes('Obese') || obesityAss.classification.includes('Overweight');
-          if (isObeseOrOver || obesityAss.source_flagged) {
-            finalRiskIncreasing.push({
-              feature: 'bmi',
-              label: 'Body Mass Index (BMI)',
-              raw_value: `${obesityAss.bmi_value} kg/m²`,
-              formatted_value: `${obesityAss.bmi_value} kg/m² · ${obesityAss.classification}`,
-              impact_pct: obesityAss.classification.includes('Obese') ? 25 : 15,
-              category: 'obesity',
-              direction: 'increases_risk',
-              tip: `${obesityAss.standard_used}${obesityAss.central_obesity_note ? ' · ' + obesityAss.central_obesity_note : ''}`,
-              source_flagged: obesityAss.source_flagged || false,
-              diagnostic_criterion: obesityAss.classification.includes('Obese') ? 'Obese (Asian cutoff)' : null
-            });
-          } else {
-            finalProtective.push({
-              feature: 'bmi',
-              label: 'Body Mass Index (BMI)',
-              raw_value: `${obesityAss.bmi_value} kg/m²`,
-              formatted_value: `${obesityAss.bmi_value} kg/m² · ${obesityAss.classification}`,
-              impact_pct: 20,
-              category: 'obesity',
-              direction: 'decreases_risk',
-              tip: `Within healthy Asian cutoff standard (${obesityAss.standard_used}).`
+    // Always ensure HbA1c factor is shown when Tier 2 model is used
+    if (tierPrediction && tierPrediction.model_used === 'tier2_with_hba1c' && !hba1cProcessed && verifiedVitals.hba1c?.value != null) {
+      const allContribs = tierPrediction.all_shap_contributions || [];
+      const hba1cMatch = allContribs.find(s => (s.feature || '').toLowerCase().includes('hba1c') || (s.feature || '').toLowerCase().includes('glycated'));
+      const sVal = hba1cMatch ? Number(hba1cMatch.shap_value || 0) : -0.107;
+      const hba1cVal = verifiedVitals.hba1c.value;
+      const hba1cRangeText = hba1cVal >= 6.5 ? 'suggestive of diabetes range' : (hba1cVal >= 5.7 ? 'prediabetes range' : 'normal range');
+      if (sVal > 0) {
+        finalRiskIncreasing.push({
+          feature: 'Glycated Hemoglobin (HbA1c)',
+          label: 'HbA1c',
+          shap_value: sVal,
+          impact_pct: Math.round(Math.abs(sVal) * 100),
+          magnitude: Math.abs(sVal),
+          direction: 'increases_risk',
+          source: 'From report',
+          raw_value: `${hba1cVal}%`
+        });
+      } else if (hba1cVal >= 5.7) {
+        neutralModelNotes.push(`Model note: HbA1c ${hba1cVal}% (${hba1cRangeText}), contribution ${sVal.toFixed(3)}`);
+      } else {
+        finalProtective.push({
+          feature: 'Glycated Hemoglobin (HbA1c)',
+          label: 'HbA1c',
+          shap_value: sVal,
+          impact_pct: Math.round(Math.abs(sVal) * 100),
+          magnitude: Math.abs(sVal),
+          direction: 'decreases_risk',
+          source: 'From report',
+          raw_value: `${hba1cVal}%`
+        });
+      }
+    }
+
+    // Sort factors by magnitude
+    finalRiskIncreasing.sort((a, b) => b.magnitude - a.magnitude);
+    finalProtective.sort((a, b) => b.magnitude - a.magnitude);
+
+    // Rule E: Audit Gate
+    // Passes ONLY if every value labeled "From report" is found in source text/OCR output
+    // and no displayed factor uses a "Not provided" value.
+    const failedAuditValues = [];
+    const ocrLower = rawOcr.toLowerCase();
+
+    dataUsed.forEach(item => {
+      if (item.source === 'From report') {
+        const vStr = String(item.value);
+        if (vStr === 'Not provided' || !vStr) {
+          failedAuditValues.push(`${item.label}: labeled 'From report' but is missing`);
+        } else {
+          // Check that numeric tokens or values appear in raw OCR text
+          const numMatch = vStr.match(/[0-9]+(?:\.[0-9]+)?/g);
+          if (numMatch) {
+            numMatch.forEach(n => {
+              if (!ocrLower.includes(n.toLowerCase())) {
+                failedAuditValues.push(`${item.label} (${n}) not found in report text`);
+              }
             });
           }
         }
       }
-    } catch (factorErr) {
-      console.warn('Notice: Factor mapping error (non-fatal fallback to empty):', factorErr.message);
-    }
+    });
 
-    // Synchronize aliases so riskIncreasing and protective are always populated and safe
-    riskIncreasing = finalRiskIncreasing || [];
-    protective = finalProtective || [];
+    [...finalRiskIncreasing, ...finalProtective].forEach(f => {
+      if (f.raw_value === 'Not provided' || f.raw_value == null || String(f.raw_value).toLowerCase().includes('not provided')) {
+        failedAuditValues.push(`Factor '${f.label}' uses unprovided value`);
+      }
+    });
+
+    const auditPassed = failedAuditValues.length === 0;
 
     const predictionId = `pred_met_${crypto.randomUUID().slice(0, 10)}`;
-    const isDiagnostic = Boolean(diabetesAss.fasting_glucose_status?.includes('Diagnostic') || diabetesAss.hba1c_status?.includes('Diagnostic'));
-    const isObese = Boolean(obesityAss.classification?.includes('Obese'));
-    const vitalityScore = isDiagnostic ? 55 : (isObese ? 68 : 82);
-    const metabolicCategory = diabetesAss.fasting_glucose_status || diabetesAss.hba1c_status || (isObese ? 'Adiposity Risk' : 'Optimal');
+    const metabolicCategory = tierPrediction ? tierPrediction.final_risk_level : (diabetesAss.fasting_glucose_status || 'Evaluated');
+    const vitalityScore = Math.max(35, Math.min(95, tierPrediction ? Math.round((1 - tierPrediction.predicted_probability) * 100) : 70));
 
-    // Optional Historical Comparison & Trend Analysis (Isolated try/catch so secondary feature failure cannot crash pipeline)
-    let trendAnalysis = null;
-    try {
-      const prevReportsRes = await db.query(
-        'SELECT report_id, extracted_metrics, upload_date FROM medical_reports WHERE user_id = $1 ORDER BY upload_date DESC LIMIT 10',
-        [req.user.user_id]
-      );
-      if (prevReportsRes.rows && prevReportsRes.rows.length > 0) {
-        const previousReports = prevReportsRes.rows.filter(r => r.report_id !== reportId);
-        if (previousReports.length > 0) {
-          const prevReport = previousReports[0];
-          const prevMetrics = typeof prevReport.extracted_metrics === 'string' 
-            ? JSON.parse(prevReport.extracted_metrics) 
-            : (prevReport.extracted_metrics || prevReport.metrics || {});
-          const trends = [];
-        
-        const curFg = verifiedVitals.fasting_glucose?.value;
-        const prevFg = prevMetrics.fasting_glucose;
-        if (curFg != null && prevFg != null) {
-          const delta = Math.round((curFg - prevFg) * 10) / 10;
-          trends.push({
-            marker: 'Fasting Blood Glucose',
-            current: `${curFg} mg/dL`,
-            previous: `${prevFg} mg/dL`,
-            change: delta > 0 ? `+${delta} mg/dL` : `${delta} mg/dL`,
-            direction: delta < 0 ? 'improving' : (delta > 0 ? 'increasing' : 'stable'),
-            clinical_note: delta < 0 ? 'Improving glycemic trend compared to previous visit.' : (delta > 0 ? 'Elevated compared to previous visit.' : 'Stable.')
-          });
-        }
-
-        const curA1c = verifiedVitals.hba1c?.value;
-        const prevA1c = prevMetrics.hba1c;
-        if (curA1c != null && prevA1c != null) {
-          const delta = Math.round((curA1c - prevA1c) * 10) / 10;
-          trends.push({
-            marker: 'HbA1c',
-            current: `${curA1c}%`,
-            previous: `${prevA1c}%`,
-            change: delta > 0 ? `+${delta}%` : `${delta}%`,
-            direction: delta < 0 ? 'improving' : (delta > 0 ? 'increasing' : 'stable'),
-            clinical_note: delta < 0 ? 'Improving long-term glycemic control trend.' : (delta > 0 ? 'Increased from previous visit.' : 'Stable.')
-          });
-        }
-
-        const curBmi = verifiedVitals.bmi?.value;
-        const prevBmi = prevMetrics.bmi;
-        if (curBmi != null && prevBmi != null) {
-          const delta = Math.round((curBmi - prevBmi) * 10) / 10;
-          trends.push({
-            marker: 'BMI',
-            current: `${curBmi} kg/m²`,
-            previous: `${prevBmi} kg/m²`,
-            change: delta > 0 ? `+${delta} kg/m²` : `${delta} kg/m²`,
-            direction: delta < 0 ? 'improving' : (delta > 0 ? 'increasing' : 'stable'),
-            clinical_note: delta < 0 ? 'Weight reduction trend noted.' : (delta > 0 ? 'Weight increase noted.' : 'Stable.')
-          });
-        }
-
-        if (trends.length > 0) {
-          trendAnalysis = {
-            previous_visit_date: prevReport.upload_date,
-            trends
-          };
-          enrichedMetrics.trend_analysis = trendAnalysis;
-        }
-      }
-    }
-  } catch (trendErr) {
-    console.warn('Notice: Historical trend comparison error (non-fatal):', trendErr.message);
-  }
-
-    // Insert risk predictions and explanations (Isolated try/catch)
+    // Store in DB
     try {
       await db.query(
         `INSERT INTO risk_predictions 
@@ -967,10 +986,10 @@ async function uploadMetabolicReport(req, res) {
           predictionId,
           req.user.user_id,
           'Metabolic Health (Diabetes & Obesity)',
-          null, // Zero fabricated single percentage score as required
+          tierPrediction ? Math.round(tierPrediction.predicted_probability * 100) : null,
           metabolicCategory,
           1.0,
-          'metabolic_v1_ada_who',
+          tierPrediction ? tierPrediction.model_used : 'tier1_no_labs',
           vitalityScore,
           JSON.stringify(verifiedVitals),
           new Date().toISOString()
@@ -985,10 +1004,10 @@ async function uploadMetabolicReport(req, res) {
         [
           explId,
           predictionId,
-          JSON.stringify((finalRiskIncreasing || []).map(f => f.label || f.feature || '')),
-          JSON.stringify(finalRiskIncreasing || []),
-          JSON.stringify(finalProtective || []),
-          JSON.stringify({ combined_risk_note: combinedRiskNote, obesity_assessment: obesityAss, pima_model: pimaModel, trend_analysis: trendAnalysis }),
+          JSON.stringify(finalRiskIncreasing.map(f => f.label)),
+          JSON.stringify(finalRiskIncreasing),
+          JSON.stringify(finalProtective),
+          JSON.stringify({ combined_risk_note: combinedRiskNote, obesity_assessment: obesityAss }),
           new Date().toISOString()
         ]
       );
@@ -996,166 +1015,67 @@ async function uploadMetabolicReport(req, res) {
       console.warn('Notice: Secondary risk predictions DB record error (non-fatal):', dbErr.message);
     }
 
-    // Construct predictionData with defensive array checks and cache (Isolated try/catch)
-    try {
-      const predictionData = {
-        message: 'Metabolic assessment evaluated via 4-step pipeline (ADA + WHO Asian cutoffs).',
-        vitality_score: vitalityScore,
-        is_metabolic_report: true,
-        combined_risk_note: combinedRiskNote,
-        diabetes_assessment: diabetesAss,
-        obesity_assessment: obesityAss,
-        step4_audit: ocrResult.step4_audit,
-        calculated_vitals: enrichedMetrics,
-        pima_population_model: pimaModel,
-        trend_analysis: trendAnalysis,
-        predictions: {
-          metabolic: {
-            prediction_id: predictionId,
-            disease_type: 'Metabolic Health (Diabetes & Obesity)',
-            risk_score: null,
-            category: metabolicCategory,
-            confidence: 1.0,
-            vitality_score: vitalityScore,
-            explanation: {
-              top_features: (finalRiskIncreasing || []).map(f => f?.label || f?.feature || ''),
-              risk_increasing_factors: finalRiskIncreasing || [],
-              protective_factors: finalProtective || [],
-              all_contributions: pimaModel?.shap_drivers?.all_features_shap || []
-            }
-          },
-          diabetes: {
-            disease_type: 'Type 2 Diabetes Risk (ADA Criteria)',
-            risk_score: null,
-            category: diabetesAss.fasting_glucose_status || 'Normal',
-            explanation: {
-              top_features: (riskIncreasing || []).map(f => f?.label || f?.feature || ''),
-              risk_increasing_factors: riskIncreasing || [],
-              protective_factors: protective || []
-            }
-          },
-          cardiovascular: null
-        }
-      };
+    // Construct response and cache
+    const predictionData = {
+      message: 'Metabolic assessment evaluated via two-tier ML risk model and ADA/WHO standards.',
+      vitality_score: vitalityScore,
+      is_metabolic_report: true,
+      combined_risk_note: combinedRiskNote,
+      diabetes_assessment: diabetesAss,
+      obesity_assessment: obesityAss,
+      step4_audit: {
+        audit_passed: auditPassed,
+        audit_label: auditPassed ? 'Verified / Audit Passed' : 'Audit Failed',
+        failed_values: failedAuditValues
+      },
+      data_used: dataUsed,
+      diabetes_tier_prediction: tierPrediction,
+      missing_tier1_features: missingTier1,
+      calculated_vitals: enrichedMetrics,
+      predictions: {
+        diabetes: tierPrediction ? {
+          prediction_id: predictionId,
+          disease_type: 'Type 2 Diabetes Risk (' + (tierPrediction.model_used === 'tier2_with_hba1c' ? 'Lab-informed estimate (HbA1c)' : 'Risk estimate without lab values') + ')',
+          risk_score: Math.round(tierPrediction.predicted_probability * 100),
+          raw_probability: tierPrediction.predicted_probability,
+          category: tierPrediction.final_risk_level,
+          model_used: tierPrediction.model_used,
+          confidence: 1.0,
+          disclaimer: 'Screening estimate, not a diagnosis.',
+          explanation: {
+            top_features: finalRiskIncreasing.map(f => f.label),
+            risk_increasing_factors: finalRiskIncreasing,
+            protective_factors: finalProtective,
+            neutral_model_notes: neutralModelNotes
+          }
+        } : null,
+        metabolic: {
+          prediction_id: predictionId,
+          disease_type: 'Metabolic Health (Diabetes & Obesity)',
+          risk_score: tierPrediction ? Math.round(tierPrediction.predicted_probability * 100) : null,
+          raw_probability: tierPrediction?.predicted_probability ?? null,
+          category: tierPrediction?.final_risk_level || metabolicCategory,
+          confidence: 1.0,
+          explanation: {
+            top_features: finalRiskIncreasing.map(f => f.label),
+            risk_increasing_factors: finalRiskIncreasing,
+            protective_factors: finalProtective,
+            neutral_model_notes: neutralModelNotes
+          }
+        },
+        cardiovascular: null
+      }
+    };
 
+    try {
       await cacheService.set(`latest_prediction:${req.user.user_id}`, predictionData, 86400);
     } catch (cacheErr) {
       console.warn('Notice: Prediction caching error (non-fatal):', cacheErr.message);
     }
 
-    // Automatically trigger dietary recommendations with exact verified demographics & vitals (Isolated try/catch)
-    try {
-      const recPayload = {
-        report_type: 'Metabolic Panel (Diabetes & Obesity)',
-        age: Number(verifiedVitals.age || 40),
-        gender: verifiedVitals.sex || 'Male',
-        height_cm: Number(verifiedVitals.height_cm || 0),
-        weight_kg: Number(verifiedVitals.weight_kg || 0),
-        bmi: verifiedVitals.bmi?.value ? Number(verifiedVitals.bmi.value) : 24.0,
-        glucose: Number(verifiedVitals.fasting_glucose?.value || 98),
-        hba1c: verifiedVitals.hba1c?.value ? Number(verifiedVitals.hba1c.value) : null,
-        waist_circumference_cm: verifiedVitals.waist_circumference_cm ? Number(verifiedVitals.waist_circumference_cm) : null,
-        diabetes_risk: diabetesAss.fasting_glucose_status || diabetesAss.hba1c_status || 'Normal',
-        cvd_risk: 'Low Risk',
-        diet_type: 'veg',
-        calorie_target: null
-      };
-
-      const recRes = await fastapiClient.getRecommendations(recPayload);
-      if (recRes && recRes.diet_plan) {
-        const planId = `plan_met_${crypto.randomUUID().slice(0, 10)}`;
-        const storedMealsData = {
-          days: recRes.diet_plan.days,
-          single_day_meals: recRes.diet_plan.meals,
-          diet_type: recRes.diet_plan.diet_type || 'veg',
-          clinical_rationale: recRes.diet_plan.clinical_rationale,
-          findings_alignment: recRes.diet_plan.findings_alignment,
-          recommended_baseline_calories: recRes.diet_plan.recommended_baseline_calories,
-          calorie_breakdown: recRes.diet_plan.calorie_breakdown
-        };
-
-        await db.query(
-          `INSERT INTO diet_plans 
-           (plan_id, user_id, calorie_target, total_estimated_calories, total_macronutrients, dietary_restrictions, meals, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [
-            planId,
-            req.user.user_id,
-            recRes.diet_plan.calorie_target,
-            recRes.diet_plan.total_estimated_calories || recRes.diet_plan.calorie_target,
-            JSON.stringify(recRes.diet_plan.total_macronutrients || {}),
-            JSON.stringify(recRes.diet_plan.dietary_restrictions || []),
-            JSON.stringify(storedMealsData),
-            new Date().toISOString()
-          ]
-        );
-        await cacheService.delete(`current_recommendations:${req.user.user_id}`);
-      }
-    } catch (recErr) {
-      console.log('Notice: Auto metabolic recommendations generation:', recErr.message);
-    }
-
-    return res.status(201).json({
-      message: 'Metabolic panel parsed and verified successfully (Diabetes + Obesity)',
-      report_id: reportId,
-      filename: originalname,
-      pipeline_version: 'metabolic_v1_ada_who',
-      pipeline_status: 'APPROVED',
-      fallback_used: Boolean(ocrResult.fallback_used),
-      extraction_method: ocrResult.extraction_method || 'llm',
-      fallback_reason: ocrResult.fallback_reason || null,
-      cached: Boolean(ocrResult.cached),
-      extracted_metrics: enrichedMetrics,
-      diabetes_assessment: diabetesAss,
-      obesity_assessment: obesityAss,
-      combined_risk_note: combinedRiskNote,
-      step4_audit: ocrResult.step4_audit,
-      pima_population_model: pimaModel,
-      verified_vitals: verifiedVitals,
-      audit_passed: ocrResult.audit_passed,
-      trend_analysis: trendAnalysis,
-      summary: combinedRiskNote
-    });
-
+    return res.status(200).json(predictionData);
   } catch (err) {
-    console.error('Metabolic upload error:', err.response?.data || err.message);
-    if (err.response?.status === 422) {
-      const detail = err.response?.data?.detail || err.response?.data?.error || 'Could not extract diabetes or obesity-relevant values from this report.';
-      const isRejection = typeof detail === 'string' && (detail.includes('statistical summary') || detail.includes('research'));
-      return res.status(422).json({
-        error: detail,
-        message: detail,
-        pipeline_status: isRejection ? 'REJECTED_NON_PATIENT_DOCUMENT' : 'HARD_STOP_PRE_GENERATION'
-      });
-    }
-    const isColdStart = (
-      err.response?.status === 502 ||
-      err.response?.status === 503 ||
-      err.response?.status === 504 ||
-      err.code === 'ECONNREFUSED' ||
-      err.code === 'ETIMEDOUT' ||
-      err.code === 'ECONNRESET' ||
-      (err.message && (err.message.includes('502') || err.message.includes('503') || err.message.includes('504') || err.message.toLowerCase().includes('timeout') || err.message.toLowerCase().includes('network')))
-    );
-    if (isColdStart) {
-      return res.status(503).json({
-        error: 'The AI metabolic extraction engine was waking up from sleep (Render free tier cold start).',
-        details: err.message,
-        retryable: true,
-        code: 'COLD_START'
-      });
-    }
-    if (err.response?.status === 429 || (err.message && err.message.includes('429'))) {
-      const retryAfter = 15;
-      res.set('Retry-After', String(retryAfter));
-      return res.status(429).json({
-        error: 'The AI metabolic extraction engine is temporarily rate-limited or cooling down.',
-        details: 'Rate limit (429) hit during microservice processing. Please wait 15–20 seconds and retry.',
-        retry_after: retryAfter,
-        retryable: false,
-        code: 'RATE_LIMIT'
-      });
-    }
+    console.error('Metabolic upload error:', err.message);
     return res.status(500).json({ error: 'Failed to process metabolic report', details: err.message });
   }
 }

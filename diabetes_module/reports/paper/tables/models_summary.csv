@@ -1,0 +1,6 @@
+Model Name,Category,Tier 1 Features,Tier 2 Features
+Logistic Regression,Classical ML,10 tabular features (Standardized & Imputed),11 features (10 tabular + HbA1c)
+Random Forest,Classical ML,10 tabular features,11 features
+XGBoost,Classical ML (Boosted),10 tabular features,11 features
+PyTorch MLP,Deep Learning,10 tabular features,11 features
+Stacking Ensemble,Hybrid Ensemble,"Meta-learner over LR, RF, XGB, MLP","Meta-learner over Tier 2 LR, RF, XGB, MLP"

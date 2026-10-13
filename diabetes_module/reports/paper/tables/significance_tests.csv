@@ -1,0 +1,8 @@
+Comparison Pair,ROC-AUC Difference,95% CI,p-value,Interval Includes 0?
+Tier 1: Stacking vs XGBoost,+0.004,"[-0.000, +0.008]",0.060,Yes (Not Sig)
+Tier 1: XGBoost vs Logistic Regression,+0.000,"[-0.007, +0.007]",0.920,Yes (Not Sig)
+Tier 1: MLP vs XGBoost,-0.000,"[-0.006, +0.006]",0.954,Yes (Not Sig)
+Tier 2: Stacking vs XGBoost,+0.002,"[-0.001, +0.006]",0.256,Yes (Not Sig)
+Tier 2: XGBoost vs Logistic Regression,+0.005,"[-0.003, +0.013]",0.208,Yes (Not Sig)
+Tier 2: MLP vs XGBoost,+0.002,"[-0.002, +0.006]",0.376,Yes (Not Sig)
+Tier 2 vs Tier 1 (Identical Rows),+0.094,"[+0.076, +0.112]",< 0.001,No (Stat Sig)

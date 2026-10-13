@@ -1,0 +1,13 @@
+HbA1c,probability,model_probability,model_risk_level,lab_status,final_risk_level,hba1c_contribution_log_odds
+4.8,0.1493,0.1493,Low,normal,Low,-1.847000002861023
+5.1,0.0667,0.0667,Low,normal,Low,-2.13100004196167
+5.4,0.0667,0.0667,Low,normal,Low,-1.9736000299453735
+5.7,0.1493,0.1493,Low,prediabetes range,Moderate,-1.0528000593185425
+6.0,0.1493,0.1493,Low,prediabetes range,Moderate,-0.49799999594688416
+6.1,0.2901,0.2901,Moderate,prediabetes range,Moderate,-0.10649999976158142
+6.3,0.2901,0.2901,Moderate,prediabetes range,Moderate,0.6496999859809875
+6.5,0.6667,0.6667,High,suggestive of diabetes range; confirm with a clinician,High,1.6581000089645386
+6.8,0.8835,0.8835,High,suggestive of diabetes range; confirm with a clinician,High,2.6389000415802
+7.2,0.8835,0.8835,High,suggestive of diabetes range; confirm with a clinician,High,2.971400022506714
+8.0,0.9444,0.9444,High,suggestive of diabetes range; confirm with a clinician,High,3.627700090408325
+9.0,0.9468,0.9468,High,suggestive of diabetes range; confirm with a clinician,High,3.782399892807007

@@ -1,0 +1,12 @@
+Rank,Feature,Mean_Abs_SHAP
+1,hba1c,1.9867
+2,age,0.4538
+3,family_history,0.447
+4,high_bp,0.3859
+5,high_chol,0.2179
+6,bmi,0.1845
+7,mean_dbp,0.1452
+8,phys_activity,0.1108
+9,sex,0.0755
+10,mean_sbp,0.043
+11,smoker,0.0239

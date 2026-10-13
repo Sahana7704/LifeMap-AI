@@ -1,0 +1,160 @@
+services:
+  # -------------------------------------------------------------
+  # Relational Database: PostgreSQL 15
+  # -------------------------------------------------------------
+  db:
+    image: postgres:15-alpine
+    container_name: lifemap-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-lifemap}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-lifemap_local_password}
+      POSTGRES_DB: ${DB_NAME:-lifemap_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/src/db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-lifemap} -d ${DB_NAME:-lifemap_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # -------------------------------------------------------------
+  # In-memory Cache & Session Store: Redis 7
+  # -------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: lifemap-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # -------------------------------------------------------------
+  # Clinical & Metabolic ML Microservice (FastAPI on Port 8000)
+  # -------------------------------------------------------------
+  ml-service:
+    build:
+      context: ./ml_service
+      dockerfile: Dockerfile
+    container_name: lifemap-ml-service
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      PORT: 8000
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      METABOLIC_LLM_MODEL: ${METABOLIC_LLM_MODEL:-gemini-2.5-flash-lite}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # -------------------------------------------------------------
+  # Diabetes Tier 1 / Tier 2 Microservice (FastAPI on Port 8005)
+  # -------------------------------------------------------------
+  diabetes-service:
+    build:
+      context: ./diabetes_module
+      dockerfile: Dockerfile
+    container_name: lifemap-diabetes-service
+    restart: unless-stopped
+    ports:
+      - "8005:8005"
+    environment:
+      PORT: 8005
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+      DIABETES_MODELS_DIR: /app/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # -------------------------------------------------------------
+  # Core Express Backend API Gateway (Port 5000)
+  # -------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: lifemap-backend
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      PORT: 5000
+      NODE_ENV: production
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+      DATABASE_URL: postgresql://${DB_USER:-lifemap}:${DB_PASSWORD:-lifemap_local_password}@db:5432/${DB_NAME:-lifemap_db}
+      REDIS_URL: redis://redis:6379
+      FASTAPI_URL: http://ml-service:8000
+      DIABETES_SERVICE_URL: http://diabetes-service:8005
+      JWT_SECRET: ${JWT_SECRET:-lifemap_development_secret_key_12345}
+      UPLOADS_DIR: /app/uploads
+    volumes:
+      - lifemap_uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ml-service:
+        condition: service_healthy
+      diabetes-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/health', (r) => { if (r.statusCode !== 200) process.exit(1); })"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # -------------------------------------------------------------
+  # Next.js Web Frontend (Port 3000)
+  # -------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        BACKEND_URL: http://backend:5000/api
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5000/api}
+    container_name: lifemap-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+      BACKEND_URL: http://backend:5000/api
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5000/api}
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/', (r) => { if (r.statusCode >= 500) process.exit(1); })"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  postgres_data:
+  redis_data:
+  lifemap_uploads:

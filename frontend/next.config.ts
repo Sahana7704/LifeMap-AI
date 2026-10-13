@@ -4,11 +4,10 @@ const nextConfig: NextConfig = {
   async rewrites() {
     const isProduction = process.env.NODE_ENV === 'production';
     const backendEnv = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL;
-    if (!backendEnv && isProduction) {
+    if (!backendEnv) {
       return [];
     }
-    const backend = (backendEnv || 'http://127.0.0.1:5000/api')
-      .replace(/\/api\/?$/, '');
+    const backend = backendEnv.replace(/\/api\/?$/, '');
     return [
       {
         source: '/api/:path*',

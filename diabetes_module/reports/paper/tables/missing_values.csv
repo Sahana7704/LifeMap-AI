@@ -1,0 +1,18 @@
+Cohort / Dataset,Feature,Missing Count,Missing (%),Handling
+"NHANES Tier 1 (n=17,468)",age,0,0.00%,Median/Mode fit on train split
+"NHANES Tier 1 (n=17,468)",bmi,993,5.68%,Median/Mode fit on train split
+"NHANES Tier 1 (n=17,468)",mean_sbp,1385,7.93%,Median/Mode fit on train split
+"NHANES Tier 1 (n=17,468)",mean_dbp,1385,7.93%,Median/Mode fit on train split
+"NHANES Tier 1 (n=17,468)",high_bp,21,0.12%,Median/Mode fit on train split
+"NHANES Tier 1 (n=17,468)",high_chol,106,0.61%,Median/Mode fit on train split
+"NHANES Tier 1 (n=17,468)",smoker,11,0.06%,Median/Mode fit on train split
+"NHANES Tier 1 (n=17,468)",phys_activity,0,0.00%,Median/Mode fit on train split
+"NHANES Tier 1 (n=17,468)",family_history,1196,6.85%,Median/Mode fit on train split
+"NHANES Tier 2 Lab (n=17,468)",hba1c,1532,8.77%,Complete cases in Tier 2 evaluation
+"BRFSS Shared (n=249,049)",age_bucket,0,0.00%,Complete preprocessed dataset (0% missing)
+"BRFSS Shared (n=249,049)",sex,0,0.00%,Complete preprocessed dataset (0% missing)
+"BRFSS Shared (n=249,049)",bmi,0,0.00%,Complete preprocessed dataset (0% missing)
+"BRFSS Shared (n=249,049)",high_bp,0,0.00%,Complete preprocessed dataset (0% missing)
+"BRFSS Shared (n=249,049)",high_chol,0,0.00%,Complete preprocessed dataset (0% missing)
+"BRFSS Shared (n=249,049)",smoker,0,0.00%,Complete preprocessed dataset (0% missing)
+"BRFSS Shared (n=249,049)",phys_activity,0,0.00%,Complete preprocessed dataset (0% missing)

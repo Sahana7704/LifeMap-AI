@@ -1,0 +1,255 @@
+{
+  "case_1": {
+    "input": {
+      "features": {
+        "age": 25.0,
+        "sex": 0,
+        "bmi": 21.5,
+        "mean_sbp": 115.0,
+        "mean_dbp": 72.0,
+        "high_bp": 0,
+        "high_chol": 0,
+        "smoker": 0,
+        "phys_activity": 1,
+        "family_history": 0
+      },
+      "labs": null
+    },
+    "output": {
+      "status": "success",
+      "predicted_probability": 0.0052,
+      "percentage_risk": "0.5%",
+      "base_risk_level": "Low",
+      "final_risk_level": "Low",
+      "escalation_notes": "ML-predicted risk level maintained.",
+      "top_5_shap_contributions": [
+        {
+          "feature": "Age (years)",
+          "shap_value": -2.107599973678589,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 2.107599973678589
+        },
+        {
+          "feature": "BMI (kg/m^2)",
+          "shap_value": -0.7222999930381775,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.7222999930381775
+        },
+        {
+          "feature": "Family History of Diabetes",
+          "shap_value": -0.6674000024795532,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.6674000024795532
+        },
+        {
+          "feature": "History of High Blood Pressure",
+          "shap_value": -0.31940001249313354,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.31940001249313354
+        },
+        {
+          "feature": "History of High Cholesterol",
+          "shap_value": -0.218299999833107,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.218299999833107
+        }
+      ],
+      "laboratory_assessment": {
+        "hba1c_value": "not provided",
+        "hba1c_category": "not provided",
+        "fasting_glucose_value": "not provided",
+        "fasting_glucose_category": "not provided",
+        "overall_lab_status": "not provided",
+        "escalation_recommended": false,
+        "escalation_reason": "No laboratory values provided."
+      },
+      "lifestyle_recommendations": [
+        {
+          "trigger": "Optimal Baseline Non-Lab Profile",
+          "advice": "Continue maintaining current balanced nutrition, regular exercise, and routine annual metabolic health screening."
+        }
+      ],
+      "disclaimer": "DISCLAIMER: LifeMap AI provides probabilistic risk assessment and lifestyle recommendations for educational and preventive wellness purposes only. It is not intended as medical diagnosis, treatment, or clinical advice. Consult a qualified healthcare professional for formal diagnosis."
+    }
+  },
+  "case_2": {
+    "input": {
+      "features": {
+        "age": 52.0,
+        "sex": 1,
+        "bmi": 29.4,
+        "mean_sbp": 134.0,
+        "mean_dbp": 84.0,
+        "high_bp": 1,
+        "high_chol": 1,
+        "smoker": 0,
+        "phys_activity": 0,
+        "family_history": 1
+      },
+      "labs": {
+        "hba1c": 5.9,
+        "fasting_glucose": 110.0
+      }
+    },
+    "output": {
+      "status": "success",
+      "predicted_probability": 0.4017,
+      "percentage_risk": "40.2%",
+      "base_risk_level": "High",
+      "final_risk_level": "High",
+      "escalation_notes": "ML-predicted risk level maintained.",
+      "top_5_shap_contributions": [
+        {
+          "feature": "Family History of Diabetes",
+          "shap_value": 0.6632999777793884,
+          "impact": "Increases Risk",
+          "magnitude": 0.6632999777793884
+        },
+        {
+          "feature": "History of High Blood Pressure",
+          "shap_value": 0.3160000145435333,
+          "impact": "Increases Risk",
+          "magnitude": 0.3160000145435333
+        },
+        {
+          "feature": "Age (years)",
+          "shap_value": 0.28119999170303345,
+          "impact": "Increases Risk",
+          "magnitude": 0.28119999170303345
+        },
+        {
+          "feature": "Diastolic Blood Pressure (mmHg)",
+          "shap_value": -0.25540000200271606,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.25540000200271606
+        },
+        {
+          "feature": "History of High Cholesterol",
+          "shap_value": 0.24539999663829803,
+          "impact": "Increases Risk",
+          "magnitude": 0.24539999663829803
+        }
+      ],
+      "laboratory_assessment": {
+        "hba1c_value": "5.9%",
+        "hba1c_category": "Prediabetes (5.7 - 6.4%)",
+        "fasting_glucose_value": "110.0 mg/dL",
+        "fasting_glucose_category": "Prediabetes (100 - 125 mg/dL)",
+        "overall_lab_status": "Prediabetes",
+        "escalation_recommended": true,
+        "escalation_reason": "Elevated glycemic marker detected (HbA1c 5.7-6.4% or Glucose 100-125 mg/dL); confirm with a clinician."
+      },
+      "lifestyle_recommendations": [
+        {
+          "trigger": "Elevated BMI (29.4 kg/m^2)",
+          "advice": "A structured weight management plan targeting a 5-7% reduction in body weight has been shown to reduce type 2 diabetes incidence by up to 58% in clinical trials."
+        },
+        {
+          "trigger": "Sedentary / Low Physical Activity",
+          "advice": "Incorporate at least 150 minutes of moderate-intensity aerobic physical activity per week (e.g., brisk walking, swimming, cycling), coupled with resistance exercise 2-3 times weekly."
+        },
+        {
+          "trigger": "Elevated Blood Pressure (134/84 mmHg)",
+          "advice": "Adopt dietary patterns rich in whole grains, potassium, and magnesium (such as the DASH diet) and reduce dietary sodium intake below 2,300 mg/day."
+        },
+        {
+          "trigger": "History of Dyslipidemia / High Cholesterol",
+          "advice": "Prioritize soluble dietary fiber (oats, legumes, flaxseeds) and reduce saturated fats to improve lipid profiles and insulin sensitivity."
+        }
+      ],
+      "disclaimer": "DISCLAIMER: LifeMap AI provides probabilistic risk assessment and lifestyle recommendations for educational and preventive wellness purposes only. It is not intended as medical diagnosis, treatment, or clinical advice. Consult a qualified healthcare professional for formal diagnosis."
+    }
+  },
+  "case_3": {
+    "input": {
+      "features": {
+        "age": 65.0,
+        "sex": 0,
+        "bmi": 36.2,
+        "mean_sbp": 145.0,
+        "mean_dbp": 90.0,
+        "high_bp": 1,
+        "high_chol": 1,
+        "smoker": 1,
+        "phys_activity": 0,
+        "family_history": 1
+      },
+      "labs": {
+        "hba1c": 7.1,
+        "fasting_glucose": null
+      }
+    },
+    "output": {
+      "status": "success",
+      "predicted_probability": 0.3556,
+      "percentage_risk": "35.6%",
+      "base_risk_level": "Moderate",
+      "final_risk_level": "High",
+      "escalation_notes": "Escalated to High Risk: Glycemic markers are suggestive of diabetes range; confirm with a clinician.",
+      "top_5_shap_contributions": [
+        {
+          "feature": "Diastolic Blood Pressure (mmHg)",
+          "shap_value": -0.6078000068664551,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.6078000068664551
+        },
+        {
+          "feature": "Age (years)",
+          "shap_value": 0.4984999895095825,
+          "impact": "Increases Risk",
+          "magnitude": 0.4984999895095825
+        },
+        {
+          "feature": "Family History of Diabetes",
+          "shap_value": 0.4708000123500824,
+          "impact": "Increases Risk",
+          "magnitude": 0.4708000123500824
+        },
+        {
+          "feature": "BMI (kg/m^2)",
+          "shap_value": 0.37599998712539673,
+          "impact": "Increases Risk",
+          "magnitude": 0.37599998712539673
+        },
+        {
+          "feature": "History of High Cholesterol",
+          "shap_value": 0.2824999988079071,
+          "impact": "Increases Risk",
+          "magnitude": 0.2824999988079071
+        }
+      ],
+      "laboratory_assessment": {
+        "hba1c_value": "7.1%",
+        "hba1c_category": "Diabetes Range (>= 6.5%)",
+        "fasting_glucose_value": "not provided",
+        "fasting_glucose_category": "not provided",
+        "overall_lab_status": "Diabetes Range",
+        "escalation_recommended": true,
+        "escalation_reason": "Diagnostic threshold met (HbA1c >= 6.5% or Fasting Glucose >= 126 mg/dL); suggestive of diabetes range; confirm with a clinician."
+      },
+      "lifestyle_recommendations": [
+        {
+          "trigger": "Elevated BMI (36.2 kg/m^2)",
+          "advice": "A structured weight management plan targeting a 5-7% reduction in body weight has been shown to reduce type 2 diabetes incidence by up to 58% in clinical trials."
+        },
+        {
+          "trigger": "Sedentary / Low Physical Activity",
+          "advice": "Incorporate at least 150 minutes of moderate-intensity aerobic physical activity per week (e.g., brisk walking, swimming, cycling), coupled with resistance exercise 2-3 times weekly."
+        },
+        {
+          "trigger": "Elevated Blood Pressure (145/90 mmHg)",
+          "advice": "Adopt dietary patterns rich in whole grains, potassium, and magnesium (such as the DASH diet) and reduce dietary sodium intake below 2,300 mg/day."
+        },
+        {
+          "trigger": "Active / Lifetime Smoking History",
+          "advice": "Tobacco use exacerbates systemic insulin resistance and endothelial inflammation. Engaging with evidence-based smoking cessation resources offers rapid cardiovascular and metabolic benefits."
+        },
+        {
+          "trigger": "History of Dyslipidemia / High Cholesterol",
+          "advice": "Prioritize soluble dietary fiber (oats, legumes, flaxseeds) and reduce saturated fats to improve lipid profiles and insulin sensitivity."
+        }
+      ],
+      "disclaimer": "DISCLAIMER: LifeMap AI provides probabilistic risk assessment and lifestyle recommendations for educational and preventive wellness purposes only. It is not intended as medical diagnosis, treatment, or clinical advice. Consult a qualified healthcare professional for formal diagnosis."
+    }
+  }
+}

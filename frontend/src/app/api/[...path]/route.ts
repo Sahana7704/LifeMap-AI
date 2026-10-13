@@ -8,17 +8,14 @@ async function handleProxy(req: NextRequest, { params }: { params: Promise<{ pat
   const path = (resolvedParams.path || []).join('/');
   const isProduction = process.env.NODE_ENV === 'production';
   const configuredBackend = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL;
-  if (!configuredBackend && isProduction) {
+  if (!configuredBackend) {
     return NextResponse.json(
-      { error: 'NEXT_PUBLIC_API_URL or BACKEND_URL environment variable is required in production with no localhost fallback.' },
+      { error: 'NEXT_PUBLIC_API_URL or BACKEND_URL environment variable is required.' },
       { status: 500 }
     );
   }
 
-  const backendBase = (
-    configuredBackend ||
-    'http://127.0.0.1:5000/api'
-  ).replace(/\/api\/?$/, '');
+  const backendBase = configuredBackend.replace(/\/api\/?$/, '');
 
   const search = req.nextUrl.search || '';
   const targetUrl = `${backendBase}/api/${path}${search}`;

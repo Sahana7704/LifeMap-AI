@@ -473,282 +473,111 @@ def extract_field_robust(
 
 def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
     """
-    Extract ONLY explicitly printed values: Fasting Glucose, Post-Prandial Glucose,
-    HbA1c, Random Glucose, Height, Weight, BMI (only if printed), Waist Circumference, Age, Sex.
-    Never calculates BMI from height+weight in this step.
-    Scans entire document text independently for all target fields across multi-section formats.
+    Step 1 Deterministic Clinical Extractor:
+    Extracts explicitly printed values from individual diagnostic reports:
+    - age, sex, height, weight, BMI (only if printed)
+    - blood pressure (mean_sbp, mean_dbp, formatted "134/84")
+    - fasting glucose, post-prandial glucose, random glucose
+    - HbA1c (strictly rows named HbA1c / Glycated Hemoglobin / Glycosylated Hemoglobin / A1c; NEVER Hemoglobin)
+    - lipid panel: total cholesterol, HDL, LDL, triglycerides
+    - clinical history: high BP, high cholesterol, smoking 100+ cigarettes, regular physical activity, family history of diabetes
+    Never calculates BMI in this step (Step 2 handles calculation).
+    Missing values remain None ("not provided"). NEVER impute or invent values.
     """
     normalized_text = unicodedata.normalize('NFKC', raw_ocr_text).replace('：', ':').replace('，', ',')
     char_count = len(normalized_text)
+    lines = [l.strip() for l in normalized_text.split('\n') if l.strip()]
 
-    # Try external LLM call first if available
-    llm_result = call_metabolic_llm(
-        system_prompt=METABOLIC_STEP1_SYSTEM_PROMPT,
-        user_prompt=f"OCR Text:\n{normalized_text}"
-    )
-    if llm_result and isinstance(llm_result, dict) and "fasting_glucose" in llm_result:
-        llm_result["fallback_used"] = False
-        llm_result["extraction_method"] = "llm"
-        llm_result["raw_text_char_count"] = char_count
-        return llm_result
+    def find_num_near(pattern: str, max_lines: int = 2, min_val: float = 0.0, max_val: float = 2000.0) -> Optional[float]:
+        for idx, line in enumerate(lines):
+            if line.lower().startswith('note:'):
+                continue
+            if re.search(pattern, line, re.I):
+                m_same = re.search(r'[:\-\|\=\s]+([0-9]+(?:\.[0-9]+)?)', line)
+                if m_same:
+                    try:
+                        v = float(m_same.group(1))
+                        if min_val <= v <= max_val:
+                            return v
+                    except ValueError:
+                        pass
+                for offset in range(1, max_lines + 1):
+                    if idx + offset < len(lines):
+                        nxt = lines[idx + offset]
+                        if nxt.lower().startswith('note:'):
+                            break
+                        m_nxt = re.match(r'^([0-9]+(?:\.[0-9]+)?)\b', nxt)
+                        if m_nxt:
+                            try:
+                                v = float(m_nxt.group(1))
+                                if min_val <= v <= max_val:
+                                    return v
+                            except ValueError:
+                                pass
+        return None
 
-    # High-precision deterministic extractor strictly following Step 1 rules
+    # 1. Age
+    age = None
+    for idx, line in enumerate(lines):
+        if re.search(r'\b(?:age)\b', line, re.I) and not line.lower().startswith('note:'):
+            m_age = re.search(r'\b([0-9]{1,3})\s*(?:years?|yrs?)?\b', line, re.I)
+            if m_age and m_age.group(1) != line.strip():
+                try:
+                    val = int(m_age.group(1))
+                    if 1 <= val <= 120:
+                        age = val
+                        break
+                except ValueError:
+                    pass
+            for offset in (1, 2):
+                if idx + offset < len(lines):
+                    m_nxt = re.match(r'^([0-9]{1,3})\s*(?:years?|yrs?)?', lines[idx + offset], re.I)
+                    if m_nxt:
+                        try:
+                            val = int(m_nxt.group(1))
+                            if 1 <= val <= 120:
+                                age = val
+                                break
+                        except ValueError:
+                            pass
+            if age is not None:
+                break
 
-    # Fasting Glucose (Scans independently across document, wrapped in try/except for Bug K)
-    fasting_glucose = None
-    fasting_glucose_ocr_note = None
-    try:
-        fg_val, fg_start, fg_end, fg_unit, fg_ref = extract_field_robust(
-            normalized_text,
-            [
-                r'fasting\s*(?:plasma\s*|blood\s*)?(?:glucose|sugar)',
-                r'\bfbs\b',
-                r'\bfbg\b',
-                r'blood\s*glucose\s*\(?\s*f\s*\)?',
-                r'glucose\s*\(?\s*f\s*\)?',
-                r'blood\s*sugar\s*\(?\s*f\s*\)?',
-                r'glucose\s*\(?fasting\)?',
-                r'blood\s*sugar\s*\(?fasting\)?'
-            ],
-            40.0, 500.0,
-            unit_pattern=r'(?:mg\s*[\/\.]\s*d[lL]|mmol\s*[\/\.]\s*[lL])',
-            allow_mmol=True,
-            exclude_headers=[r'estimated\s+avg(?:erage)?\s+glucose', r'\beag\b', r'mean\s+(?:blood\s+)?glucose', r'post\s*prandial', r'\bppbs\b', r'\bppbg\b']
-        )
-        if fg_val is None:
-            # Fallback to generic glucose if not marked as random or post-prandial
-            # Strictly filter out lines containing 'estimated average glucose', 'eag', 'mean blood glucose', or post prandial
-            if not re.search(r'\b(?:random|post\s*prandial|ppbs|ppbg|rbs)\b', normalized_text, re.I):
-                cleaned_lines = [
-                    line for line in normalized_text.split('\n')
-                    if not re.search(r'\b(?:estimated|eag|post\s*prandial|ppbs|ppbg|random|rbs)\b', line, re.I)
-                ]
-                cleaned_text = '\n'.join(cleaned_lines)
-                fg_val, fg_start, fg_end, fg_unit, fg_ref = extract_field_robust(
-                    cleaned_text,
-                    [r'blood\s*(?:glucose|sugar)', r'\bglucose\b'],
-                    40.0, 500.0,
-                    unit_pattern=r'(?:mg\s*[\/\.]\s*d[lL]|mmol\s*[\/\.]\s*[lL])',
-                    allow_mmol=True,
-                    exclude_headers=[r'estimated\s+avg(?:erage)?\s+glucose', r'\beag\b', r'mean\s+(?:blood\s+)?glucose']
-                )
-        if fg_val is not None:
-            if fg_unit == "mmol/L":
-                converted_val = round(fg_val * 18.0182, 1)
-                flagged = (fg_val >= 5.6)
-                fasting_glucose = {
-                    "value": converted_val,
-                    "unit": "mg/dL",
-                    "original_value": fg_val,
-                    "original_unit": "mmol/L",
-                    "reference_range": fg_ref or "3.9 - 5.5 mmol/L (70 - 99 mg/dL)",
-                    "source_flagged": flagged
-                }
-            else:
-                flagged = (fg_val >= 100.0)
-                fasting_glucose = {
-                    "value": fg_val,
-                    "unit": "mg/dL",
-                    "reference_range": fg_ref or "70 - 99 mg/dL",
-                    "source_flagged": flagged
-                }
-        else:
-            if re.search(r'\b(?:fasting\s*(?:plasma\s*|blood\s*)?(?:glucose|sugar)|fbs\b|fbg\b)\b', normalized_text, re.I):
-                fasting_glucose_ocr_note = "Field detected in report text, but value could not be extracted clearly. Please re-scan or enter manually."
-    except Exception as e:
-        logger.exception(f"[Step 1 Extraction] Failed extracting fasting_glucose: {e}")
+    # 2. Sex
+    sex = None
+    for idx, line in enumerate(lines):
+        if re.search(r'\b(?:sex|gender)\b', line, re.I) and not line.lower().startswith('note:'):
+            m_s = re.search(r'\b(male|female)\b', line, re.I)
+            if m_s:
+                sex = m_s.group(1).capitalize()
+                break
+            for offset in (1, 2):
+                if idx + offset < len(lines):
+                    m_nxt = re.match(r'^(male|female)\b', lines[idx + offset], re.I)
+                    if m_nxt:
+                        sex = m_nxt.group(1).capitalize()
+                        break
+            if sex is not None:
+                break
 
-    # Post-Prandial (PP) Glucose (2-hour post-meal, Bug Q)
-    post_prandial_glucose = None
-    pp_glucose_ocr_note = None
-    try:
-        pp_val, pp_start, pp_end, pp_unit, pp_ref = extract_field_robust(
-            normalized_text,
-            [
-                r'post\s*prandial\s*(?:plasma\s*|blood\s*)?(?:glucose|sugar)',
-                r'\bppbs\b',
-                r'\bppbg\b',
-                r'blood\s*glucose\s*\(?\s*pp\s*\)?',
-                r'glucose\s*\(?\s*pp\s*\)?',
-                r'blood\s*sugar\s*\(?\s*pp\s*\)?',
-                r'2\s*[-–—]?\s*h(?:ou)?r\s*post\s*(?:meal|glucose)',
-                r'post\s*meal\s*(?:blood\s*)?glucose'
-            ],
-            30.0, 500.0,
-            unit_pattern=r'(?:mg\s*[\/\.]\s*d[lL]|mmol\s*[\/\.]\s*[lL])',
-            allow_mmol=True,
-            exclude_headers=[r'fasting', r'\bfbs\b', r'\bfbg\b', r'estimated\s+avg(?:erage)?\s+glucose', r'\beag\b']
-        )
-        if pp_val is not None:
-            low_thresh = 70.0
-            high_thresh = 140.0
-            if pp_ref:
-                m_r = re.search(r'([0-9]{2,3}(?:\.[0-9]+)?)\s*[-–—~]\s*([0-9]{2,3}(?:\.[0-9]+)?)', pp_ref)
-                if m_r:
-                    low_thresh = float(m_r.group(1))
-                    high_thresh = float(m_r.group(2))
-            
-            if pp_unit == "mmol/L":
-                converted_val = round(pp_val * 18.0182, 1)
-                flagged = (pp_val >= 7.8 or pp_val < 3.9)
-                post_prandial_glucose = {
-                    "value": converted_val,
-                    "unit": "mg/dL",
-                    "original_value": pp_val,
-                    "original_unit": "mmol/L",
-                    "reference_range": pp_ref or "< 140 mg/dL (< 7.8 mmol/L)",
-                    "source_flagged": flagged,
-                    "low_threshold": round(low_thresh * 18.0182, 1) if pp_ref else 70.0
-                }
-            else:
-                flagged = (pp_val >= high_thresh or pp_val < low_thresh)
-                post_prandial_glucose = {
-                    "value": pp_val,
-                    "unit": "mg/dL",
-                    "reference_range": pp_ref or "< 140 mg/dL (ADA Standard)",
-                    "source_flagged": flagged,
-                    "low_threshold": low_thresh
-                }
-        else:
-            if re.search(r'\b(?:post\s*prandial|ppbs|ppbg|2\s*hr\s*post\s*meal)\b', normalized_text, re.I):
-                pp_glucose_ocr_note = "Post-Prandial Glucose detected in report text, but value could not be extracted clearly. Please re-scan or enter manually."
-    except Exception as e:
-        logger.exception(f"[Step 1 Extraction] Failed extracting post_prandial_glucose: {e}")
+    # 3. Height (cm)
+    height_cm = find_num_near(r'^(?:height|ht)\b', max_lines=2, min_val=50.0, max_val=250.0)
 
-    # HbA1c (Scans independently across document, wrapped in try/except for Bug K)
-    hba1c = None
-    hba1c_ocr_note = None
-    try:
-        hba1c_val, h_start, h_end, _, h_ref = extract_field_robust(
-            normalized_text,
-            [r'hba1c', r'hb\s*[-–]?\s*a1c', r'a1c', r'(?:glycated|glycosylated)\s*(?:ha?emoglobin|hb)'],
-            3.5, 20.0,
-            unit_pattern=r'(?:%|percent)'
-        )
-        if hba1c_val is not None:
-            flagged = (hba1c_val >= 5.7)
-            hba1c = {
-                "value": hba1c_val,
-                "unit": "%",
-                "reference_range": h_ref or "< 5.7%",
-                "source_flagged": flagged
-            }
-        else:
-            # Bug O: Check if HbA1c label appears in OCR text but value extraction failed
-            if re.search(r'\b(?:hba1c|hb\s*[-–]?\s*a1c|glycated\s*(?:ha?emoglobin|hb)|glycosylated\s*(?:ha?emoglobin|hb))\b', normalized_text, re.I):
-                hba1c_ocr_note = "Field detected in report text, but value could not be extracted clearly. Please re-scan or enter manually."
-    except Exception as e:
-        logger.exception(f"[Step 1 Extraction] Failed extracting hba1c: {e}")
+    # 4. Weight (kg)
+    weight_kg = find_num_near(r'^(?:weight|wt)\b', max_lines=2, min_val=20.0, max_val=300.0)
 
-    # Random Glucose (Scans independently across document, wrapped in try/except for Bug K)
-    random_glucose = None
-    try:
-        rg_val, rg_start, rg_end, rg_unit, rg_ref = extract_field_robust(
-            normalized_text,
-            [r'random\s*(?:blood\s*)?(?:glucose|sugar)', r'\brbs\b', r'glucose\s*\(?random\)?'],
-            40.0, 500.0,
-            unit_pattern=r'(?:mg\s*[\/\.]\s*d[lL]|mmol\s*[\/\.]\s*[lL])',
-            allow_mmol=True,
-            exclude_headers=[r'fasting', r'post\s*prandial', r'\bppbs\b', r'\bppbg\b', r'estimated\s+avg(?:erage)?\s+glucose', r'\beag\b']
-        )
-        if rg_val is not None:
-            if rg_unit == "mmol/L":
-                converted_val = round(rg_val * 18.0182, 1)
-                flagged = (rg_val >= 7.8)
-                random_glucose = {
-                    "value": converted_val,
-                    "unit": "mg/dL",
-                    "original_value": rg_val,
-                    "original_unit": "mmol/L",
-                    "reference_range": rg_ref or "70 - 139 mg/dL",
-                    "source_flagged": flagged
-                }
-            else:
-                flagged = (rg_val >= 140.0)
-                random_glucose = {
-                    "value": rg_val,
-                    "unit": "mg/dL",
-                    "reference_range": rg_ref or "70 - 139 mg/dL",
-                    "source_flagged": flagged
-                }
-    except Exception as e:
-        logger.exception(f"[Step 1 Extraction] Failed extracting random_glucose: {e}")
-
-    # Height (cm) (Scans independently across document, wrapped in try/except for Bug K)
-    height_cm = None
-    try:
-        m_ht = re.search(r'\b(?:height|ht)\b[\s:\-|=]*([0-9]{1,3}(?:\.[0-9]+)?)\s*(cm|cms|m|mtrs|meters)?\b', normalized_text, re.I)
-        if m_ht:
-            val = float(m_ht.group(1))
-            unit = (m_ht.group(2) or "").lower()
-            if "m" in unit and "cm" not in unit:
-                if 1.2 <= val <= 2.3:
-                    height_cm = round(val * 100.0, 1)
-            elif 100.0 <= val <= 230.0:
-                height_cm = val
-        if height_cm is None:
-            ht_val, _, _, _, _ = extract_field_robust(
-                normalized_text,
-                [r'\bheight\b', r'\bht\b'],
-                100.0, 230.0,
-                unit_pattern=r'(?:cm|cms)\b'
-            )
-            if ht_val is None:
-                ht_m, _, _, _, _ = extract_field_robust(
-                    normalized_text,
-                    [r'\bheight\b', r'\bht\b'],
-                    1.2, 2.3,
-                    unit_pattern=r'(?:m|mtrs|meters)\b'
-                )
-                if ht_m is not None:
-                    ht_val = round(ht_m * 100.0, 1)
-            if ht_val is not None:
-                height_cm = ht_val
-    except Exception as e:
-        logger.exception(f"[Step 1 Extraction] Failed extracting height_cm: {e}")
-
-    # Weight (kg) (Scans independently across document, wrapped in try/except for Bug K)
-    weight_kg = None
-    try:
-        wt_val, _, _, _, _ = extract_field_robust(
-            normalized_text,
-            [r'\bweight\b', r'\bwt\b'],
-            30.0, 250.0,
-            unit_pattern=r'(?:kg|kgs)\b'
-        )
-        if wt_val is not None:
-            weight_kg = wt_val
-    except Exception as e:
-        logger.exception(f"[Step 1 Extraction] Failed extracting weight_kg: {e}")
-
-    # BMI (ONLY if explicitly printed in source, never calculated here in Step 1, wrapped in try/except for Bug K)
+    # 5. BMI (explicitly printed only)
+    bmi_val = find_num_near(r'(?:body\s*mass\s*index|bmi)\b', max_lines=2, min_val=10.0, max_val=80.0)
     bmi = None
-    try:
-        bmi_val, bmi_start, bmi_end, _, _ = extract_field_robust(
-            normalized_text,
-            [r'body\s*mass\s*index', r'\bbmi\b'],
-            12.0, 65.0,
-            unit_pattern=r'(?:kg\s*[\/\.]\s*m[²2])?'
-        )
-        if bmi_val is not None:
-            flagged = (bmi_val >= 23.0 or bmi_val < 18.5)
-            bmi = {
-                "value": bmi_val,
-                "unit": "kg/m²",
-                "reference_range": "18.5 - 22.9 kg/m² (Asian cutoff)",
-                "source_flagged": flagged,
-                "source": "printed"
-            }
-        else:
-            bmi = {
-                "value": None,
-                "unit": "kg/m²",
-                "reference_range": "18.5 - 22.9 kg/m²",
-                "source_flagged": False,
-                "source": "not_present"
-            }
-    except Exception as e:
-        logger.exception(f"[Step 1 Extraction] Failed extracting bmi: {e}")
+    if bmi_val is not None:
+        bmi = {
+            "value": bmi_val,
+            "unit": "kg/m²",
+            "reference_range": "18.5 - 22.9 kg/m² (WHO Asian cutoff)",
+            "source_flagged": (bmi_val >= 23.0 or bmi_val < 18.5),
+            "source": "printed"
+        }
+    else:
         bmi = {
             "value": None,
             "unit": "kg/m²",
@@ -757,107 +586,232 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
             "source": "not_present"
         }
 
-    # Waist Circumference (cm) (Scans independently across document, wrapped in try/except for Bug K)
-    waist_circumference_cm = None
-    try:
-        wc_val, _, _, _, _ = extract_field_robust(
-            normalized_text,
-            [r'waist(?:\s*circumference)?', r'\bwc\b'],
-            45.0, 180.0,
-            unit_pattern=r'(?:cm|cms)\b'
-        )
-        if wc_val is not None:
-            waist_circumference_cm = wc_val
-    except Exception as e:
-        logger.exception(f"[Step 1 Extraction] Failed extracting waist_circumference_cm: {e}")
+    # 6. Blood Pressure (mean_sbp, mean_dbp, formatted "134/84")
+    mean_sbp = None
+    mean_dbp = None
+    blood_pressure = None
+    bp_pat = r'([0-9]{2,3})\s*[\/\-]\s*([0-9]{2,3})'
+    for idx, line in enumerate(lines):
+        if re.search(r'blood\s*pressure|\bbp\b', line, re.I):
+            m_bp = re.search(bp_pat, line)
+            if m_bp:
+                mean_sbp = float(m_bp.group(1))
+                mean_dbp = float(m_bp.group(2))
+                blood_pressure = f"{int(mean_sbp)}/{int(mean_dbp)}"
+                break
+            for offset in (1, 2):
+                if idx + offset < len(lines):
+                    m_bp = re.search(bp_pat, lines[idx + offset])
+                    if m_bp:
+                        mean_sbp = float(m_bp.group(1))
+                        mean_dbp = float(m_bp.group(2))
+                        blood_pressure = f"{int(mean_sbp)}/{int(mean_dbp)}"
+                        break
+            if blood_pressure:
+                break
+    if blood_pressure is None:
+        m_fallback = re.search(r'\b([0-9]{2,3})\s*[\/\-]\s*([0-9]{2,3})\s*mm\s*hg\b', normalized_text, re.I)
+        if m_fallback:
+            mean_sbp = float(m_fallback.group(1))
+            mean_dbp = float(m_fallback.group(2))
+            blood_pressure = f"{int(mean_sbp)}/{int(mean_dbp)}"
 
-    # Age (Scans independently across document, wrapped in try/except for Bug K)
-    age = None
-    try:
-        m_age = re.search(r'(?:age\s*[\/\\]\s*(?:gender|sex)|age)\s*[:\-\|\=\.]*\s*([0-9]{1,3})\s*(?:years?|yrs?|yesrs|y)?\b', normalized_text, re.I)
-        if not m_age:
-            m_age = re.search(r'([0-9]{1,3})\s*(?:years?|yrs?|yesrs)\b', normalized_text, re.I)
-        if m_age:
-            val = int(m_age.group(1))
-            if 1 <= val <= 110:
-                age = val
-    except Exception as e:
-        logger.exception(f"[Step 1 Extraction] Failed extracting age: {e}")
-
-    # Sex (Scans independently across document, robust for Bug L: explicit labels, inline all-caps, DOB info clauses, and demographic tokens)
-    sex = None
-    try:
-        # Priority 1: Explicit labeled pattern (handles "SEX: M", "GENDER: MALE", "AGE: 60 SEX: M", "Sex: Male", etc.)
-        m_explicit = re.search(
-            r'(?:\bsex|\bgender)\s*[:\-\|\=\.]*\s*(female\b|male\b|f\b|m\b)',
-            normalized_text,
-            re.I
-        )
-        if m_explicit:
-            val = m_explicit.group(1).lower()
-            sex = "Female" if val in ['f', 'female'] else "Male"
-
-        # Priority 2: Near Age / DOB / Demographic context with comma, slash, semicolon, hyphen or pipe
-        # Matches e.g. 'DOB info: Age 35, Female', 'Age 35, Female', 'Age: 35 yrs, F', '35 Y / Female', etc.
-        if not sex:
-            m_demo = re.search(
-                r'\b(?:age|dob|demographics?|patient\s*info|info)?\s*[:\-\|\=\.]*\s*(?:age\s*[:\-\|\=\.]*\s*)?[0-9]{1,3}\s*(?:years?|yrs?|y)?\s*[\s,\|\/\;\-]+\s*(female\b|male\b|f\b|m\b)',
-                normalized_text,
-                re.I
-            )
-            if m_demo:
-                val = m_demo.group(1).lower()
-                sex = "Female" if val in ['f', 'female'] else "Male"
-
-        # Priority 2b: Reversed demographic pattern: 'Female, 35 Years', 'Male / 42 Y'
-        if not sex:
-            m_demo_rev = re.search(
-                r'\b(female\b|male\b|f\b|m\b)\s*[\s,\|\/\;\-]+\s*(?:age\s*[:\-\|\=\.]*\s*)?[0-9]{1,3}\s*(?:years?|yrs?|y)?\b',
-                normalized_text,
-                re.I
-            )
-            if m_demo_rev:
-                val = m_demo_rev.group(1).lower()
-                sex = "Female" if val in ['f', 'female'] else "Male"
-
-        # Priority 3: Age/Sex combined inline or slash pattern ("AGE: 60 / SEX: M", "Age/Sex: 45/M", "Age/Gender: 60 / Male")
-        if not sex:
-            m_combo = re.search(
-                r'(?:age\s*[\/\\]\s*(?:sex|gender)|(?:sex|gender)\s*[\/\\]\s*age)\s*[:\-\|\=\.]*\s*(?:[0-9]{1,3}\s*(?:years?|yrs?|y)?\s*[\/\\]\s*)?(female\b|male\b|f\b|m\b)',
-                normalized_text,
-                re.I
-            )
-            if m_combo:
-                val = m_combo.group(1).lower()
-                sex = "Female" if val in ['f', 'female'] else "Male"
-
-        # Priority 4: Patient prefix title (anchored to name, NOT standalone "ms" which matches abbreviations or M/S)
-        if not sex:
-            if re.search(r'(?:patient\s*(?:name)?|pt\s*name|name)\s*[:\-\|\=\.]*\s*(?:mr|shri)\b', normalized_text, re.I) or re.search(r'\b(?:mr|shri)\.\s+[A-Z]', normalized_text, re.I):
-                sex = "Male"
-            elif re.search(r'(?:patient\s*(?:name)?|pt\s*name|name)\s*[:\-\|\=\.]*\s*(?:mrs|ms|miss|smt)\b', normalized_text, re.I) or re.search(r'\b(?:mrs|ms|miss|smt)\.\s+[A-Z]', normalized_text, re.I):
-                sex = "Female"
-
-        # Priority 5: Full word Female or Male in demographic header lines (excluding lab reference intervals)
-        if not sex:
-            for line in normalized_text.split('\n')[:25]:
-                if re.search(r'\b(?:patient|name|dob|age|demo|years|yrs|client|uhid|mrn|visit|doctor|dr\.)\b', line, re.I):
-                    if not re.search(r'\b(?:reference|interval|range|biological)\b', line, re.I):
-                        if re.search(r'\bfemale\b', line, re.I):
-                            sex = "Female"
+    # 7. Fasting Glucose
+    fasting_glucose = None
+    fasting_glucose_ocr_note = None
+    for idx, line in enumerate(lines):
+        if line.lower().startswith('note:'):
+            continue
+        if re.search(r'fasting\s*(?:plasma\s*|blood\s*)?glucose|\bfbs\b|\bfbg\b', line, re.I):
+            m = re.search(r'[:\-\|\=\s]+([0-9]{2,3}(?:\.[0-9]+)?)', line)
+            if m:
+                val = float(m.group(1))
+                if 40.0 <= val <= 500.0:
+                    fasting_glucose = {
+                        "value": val,
+                        "unit": "mg/dL",
+                        "reference_range": "70 - 99 mg/dL",
+                        "source_flagged": (val >= 100.0)
+                    }
+                    break
+            for offset in range(1, 3):
+                if idx + offset < len(lines):
+                    nxt = lines[idx + offset]
+                    if nxt.lower().startswith('note:'):
+                        break
+                    m = re.match(r'^([0-9]{2,3}(?:\.[0-9]+)?)\b', nxt)
+                    if m:
+                        val = float(m.group(1))
+                        if 40.0 <= val <= 500.0:
+                            fasting_glucose = {
+                                "value": val,
+                                "unit": "mg/dL",
+                                "reference_range": "70 - 99 mg/dL",
+                                "source_flagged": (val >= 100.0)
+                            }
                             break
-                        elif re.search(r'\bmale\b', line, re.I):
-                            sex = "Male"
-                            break
-    except Exception as e:
-        logger.exception(f"[Step 1 Extraction] Failed extracting sex: {e}")
+            if fasting_glucose is not None:
+                break
+    if fasting_glucose is None and re.search(r'\bfasting\b', normalized_text, re.I):
+        fasting_glucose_ocr_note = "Field detected in report text, but value could not be extracted clearly."
 
-    # Confidence assessment
+    # Post-Prandial Glucose
+    post_prandial_glucose = None
+    pp_glucose_ocr_note = None
+    pp_val = find_num_near(r'post\s*prandial|\bppbs\b|\bppbg\b|2\s*hr\s*post\s*meal', max_lines=2, min_val=30.0, max_val=500.0)
+    if pp_val is not None:
+        post_prandial_glucose = {
+            "value": pp_val,
+            "unit": "mg/dL",
+            "reference_range": "< 140 mg/dL",
+            "source_flagged": (pp_val >= 140.0 or pp_val < 70.0),
+            "low_threshold": 70.0
+        }
+
+    # Random Glucose
+    random_glucose = None
+    rg_val = find_num_near(r'random\s*(?:blood\s*)?glucose|\brbs\b', max_lines=2, min_val=40.0, max_val=500.0)
+    if rg_val is not None:
+        random_glucose = {
+            "value": rg_val,
+            "unit": "mg/dL",
+            "reference_range": "70 - 139 mg/dL",
+            "source_flagged": (rg_val >= 140.0)
+        }
+
+    # 8. HbA1c
+    # CRITICAL: STRICTLY rows named HbA1c / Glycated Hemoglobin / Glycosylated Hemoglobin / A1c
+    # NEVER mistake the "Hemoglobin" row for HbA1c!
+    hba1c = None
+    hba1c_ocr_note = None
+    for idx, line in enumerate(lines):
+        if line.lower().startswith('note:'):
+            continue
+        if re.search(r'\b(?:hba1c|hb\s*[-–]?\s*a1c|\ba1c\b|(?:glycated|glycosylated)\s*(?:ha?emoglobin|hb))\b', line, re.I):
+            m = re.search(r'[:\-\|\=\s]+([0-9]{1,2}(?:\.[0-9]+)?)', line)
+            if m:
+                val = float(m.group(1))
+                if 3.0 <= val <= 20.0:
+                    hba1c = {
+                        "value": val,
+                        "unit": "%",
+                        "reference_range": "< 5.7%",
+                        "source_flagged": (val >= 5.7)
+                    }
+                    break
+            for offset in range(1, 3):
+                if idx + offset < len(lines):
+                    nxt = lines[idx + offset]
+                    if nxt.lower().startswith('note:'):
+                        break
+                    m = re.match(r'^([0-9]{1,2}(?:\.[0-9]+)?)\b', nxt)
+                    if m:
+                        val = float(m.group(1))
+                        if 3.0 <= val <= 20.0:
+                            hba1c = {
+                                "value": val,
+                                "unit": "%",
+                                "reference_range": "< 5.7%",
+                                "source_flagged": (val >= 5.7)
+                            }
+                            break
+            if hba1c is not None:
+                break
+    if hba1c is None and re.search(r'\b(?:hba1c|hb\s*[-–]?\s*a1c|glycated\s*hemoglobin)\b', normalized_text, re.I):
+        hba1c_ocr_note = "HbA1c detected in text but value could not be extracted clearly."
+
+    # Standalone Hemoglobin (recorded separately so it is never confused with HbA1c)
+    hemoglobin = None
+    for idx, line in enumerate(lines):
+        if line.lower().startswith('note:'):
+            continue
+        if re.search(r'^(?:ha?emoglobin|hb)\b', line, re.I) and not re.search(r'\b(?:a1c|glycated|glycosylated)\b', line, re.I):
+            for offset in range(1, 3):
+                if idx + offset < len(lines):
+                    m = re.match(r'^([0-9]{1,2}(?:\.[0-9]+)?)\b', lines[idx + offset])
+                    if m:
+                        try:
+                            val = float(m.group(1))
+                            if 5.0 <= val <= 25.0:
+                                hemoglobin = val
+                                break
+                        except ValueError:
+                            pass
+            if hemoglobin is not None:
+                break
+
+    # 9. Total Cholesterol
+    tc_val = find_num_near(r'total\s*cholesterol', max_lines=2, min_val=50.0, max_val=500.0)
+    total_cholesterol = None
+    if tc_val is not None:
+        total_cholesterol = {
+            "value": tc_val,
+            "unit": "mg/dL",
+            "reference_range": "< 200 mg/dL",
+            "source_flagged": (tc_val >= 200.0)
+        }
+
+    # 10. HDL Cholesterol
+    hdl_val = find_num_near(r'^hdl(?:\s*cholesterol)?\b', max_lines=2, min_val=10.0, max_val=150.0)
+    hdl = None
+    if hdl_val is not None:
+        hdl = {
+            "value": hdl_val,
+            "unit": "mg/dL",
+            "reference_range": "> 40 mg/dL",
+            "source_flagged": (hdl_val < 40.0)
+        }
+
+    # 11. LDL Cholesterol
+    ldl_val = find_num_near(r'^ldl(?:\s*cholesterol)?\b', max_lines=2, min_val=20.0, max_val=400.0)
+    ldl = None
+    if ldl_val is not None:
+        ldl = {
+            "value": ldl_val,
+            "unit": "mg/dL",
+            "reference_range": "< 100 mg/dL",
+            "source_flagged": (ldl_val >= 100.0)
+        }
+
+    # 12. Triglycerides
+    trig_val = find_num_near(r'^triglycerides?\b', max_lines=2, min_val=20.0, max_val=1000.0)
+    triglycerides = None
+    if trig_val is not None:
+        triglycerides = {
+            "value": trig_val,
+            "unit": "mg/dL",
+            "reference_range": "< 150 mg/dL",
+            "source_flagged": (trig_val >= 150.0)
+        }
+
+    # 13. Clinical History (Yes/No mapped to 1/0)
+    def find_yn_response(label_pattern: str) -> Optional[int]:
+        for idx, line in enumerate(lines):
+            if re.search(label_pattern, line, re.I):
+                m = re.search(r'\b(yes|no)\b', line, re.I)
+                if m:
+                    return 1 if m.group(1).lower() == 'yes' else 0
+                for offset in (1, 2):
+                    if idx + offset < len(lines):
+                        nxt = lines[idx + offset].lower()
+                        if nxt.startswith('yes'):
+                            return 1
+                        if nxt.startswith('no'):
+                            return 0
+        return None
+
+    high_bp = find_yn_response(r'high\s*blood\s*pressure')
+    high_chol = find_yn_response(r'high\s*cholesterol')
+    smoker = find_yn_response(r'smoked\s*100')
+    phys_activity = find_yn_response(r'physical\s*activity')
+    family_history = find_yn_response(r'relative\s*with\s*diabetes|family\s*history.*diabetes')
+
+    waist_circumference_cm = find_num_near(r'waist(?:\s*circumference)?|\bwc\b', max_lines=2, min_val=40.0, max_val=180.0)
+
     has_primary = (
         (fasting_glucose is not None) or
         (post_prandial_glucose is not None) or
         (hba1c is not None) or
-        (random_glucose is not None) or
         (bmi.get("value") is not None) or
         (height_cm is not None and weight_kg is not None)
     )
@@ -874,14 +828,27 @@ def step1_metabolic_extraction(raw_ocr_text: str) -> Dict[str, Any]:
         "height_cm": height_cm,
         "weight_kg": weight_kg,
         "bmi": bmi,
+        "mean_sbp": mean_sbp,
+        "mean_dbp": mean_dbp,
+        "blood_pressure": blood_pressure,
+        "total_cholesterol": total_cholesterol,
+        "hdl": hdl,
+        "ldl": ldl,
+        "triglycerides": triglycerides,
+        "high_bp": high_bp,
+        "high_chol": high_chol,
+        "smoker": smoker,
+        "phys_activity": phys_activity,
+        "family_history": family_history,
+        "hemoglobin": hemoglobin,
         "waist_circumference_cm": waist_circumference_cm,
         "age": age,
         "sex": sex,
         "extraction_confidence": confidence,
         "raw_text_char_count": char_count,
         "fallback_used": True,
-        "extraction_method": "code_only_regex_fallback",
-        "fallback_reason": "Upstream LLM rate limit (429) or unavailable - extracted deterministically via regex"
+        "extraction_method": "deterministic_clinical_extractor",
+        "fallback_reason": None
     }
 
 # =====================================================================
@@ -955,6 +922,19 @@ def step2_metabolic_pre_generation_gate(
         "height_cm": None,
         "weight_kg": None,
         "bmi": bmi,
+        "mean_sbp": None,
+        "mean_dbp": None,
+        "blood_pressure": None,
+        "total_cholesterol": None,
+        "hdl": None,
+        "ldl": None,
+        "triglycerides": None,
+        "high_bp": None,
+        "high_chol": None,
+        "smoker": None,
+        "phys_activity": None,
+        "family_history": None,
+        "hemoglobin": None,
         "waist_circumference_cm": None,
         "age": extracted_json.get("age"),
         "sex": extracted_json.get("sex"),
@@ -1061,6 +1041,56 @@ def step2_metabolic_pre_generation_gate(
             if wc > cutoff:
                 verified_json["required_flagged_checklist"].append("Waist Circumference (Central Obesity)")
 
+    # Verify Blood Pressure (mean_sbp, mean_dbp, formatted)
+    msbp = extracted_json.get("mean_sbp")
+    mdbp = extracted_json.get("mean_dbp")
+    if msbp is not None and mdbp is not None:
+        sbp_s = str(int(msbp))
+        dbp_s = str(int(mdbp))
+        if re.search(rf'\b{re.escape(sbp_s)}\b', normalized_ocr) and re.search(rf'\b{re.escape(dbp_s)}\b', normalized_ocr):
+            verified_json["mean_sbp"] = msbp
+            verified_json["mean_dbp"] = mdbp
+            verified_json["blood_pressure"] = f"{int(msbp)}/{int(mdbp)}"
+            pass
+        else:
+            logger.warning(f"[Step 2 Verification] Blood pressure {msbp}/{mdbp} not in OCR, dropped.")
+
+    # Verify Lipid Panel
+    for l_key, l_label in [
+        ("total_cholesterol", "Total Cholesterol"),
+        ("hdl", "HDL Cholesterol"),
+        ("ldl", "LDL Cholesterol"),
+        ("triglycerides", "Triglycerides")
+    ]:
+        l_item = extracted_json.get(l_key)
+        if l_item and l_item.get("value") is not None:
+            l_val = l_item["value"]
+            v_str = str(int(l_val)) if l_val == int(l_val) else str(l_val)
+            if re.search(rf'\b{re.escape(v_str)}\b', normalized_ocr):
+                verified_json[l_key] = l_item
+                pass
+            else:
+                logger.warning(f"[Step 2 Verification] {l_key} {v_str} not in OCR, dropped.")
+
+    # Verify Clinical History
+    for h_key, h_pat in [
+        ("high_bp", r'high\s*blood\s*pressure'),
+        ("high_chol", r'high\s*cholesterol'),
+        ("smoker", r'smoked\s*100'),
+        ("phys_activity", r'physical\s*activity'),
+        ("family_history", r'relative\s*with\s*diabetes|family\s*history.*diabetes')
+    ]:
+        h_val = extracted_json.get(h_key)
+        if h_val is not None and re.search(h_pat, normalized_ocr, re.I):
+            verified_json[h_key] = h_val
+
+    # Verify Hemoglobin
+    hb_val = extracted_json.get("hemoglobin")
+    if hb_val is not None:
+        hb_s = str(hb_val)
+        if hb_s in normalized_ocr or re.search(rf'\b{re.escape(hb_s)}\b', normalized_ocr):
+            verified_json["hemoglobin"] = hb_val
+
     # Final sanity check: do we have at least one verified indicator?
     has_verified = (
         (verified_json["fasting_glucose"] is not None) or
@@ -1141,7 +1171,7 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
     if fg and fg.get("value") is not None:
         val = fg["value"]
         if val >= 126.0:
-            glucose_status = "Diagnostic range for diabetes"
+            glucose_status = "suggestive of diabetes range; confirm with a clinician"
         elif val >= 100.0:
             glucose_status = "Prediabetes range"
         else:
@@ -1158,7 +1188,7 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
         val = pp["value"]
         low_t = pp.get("low_threshold", 70.0)
         if val >= 200.0:
-            pp_status = "Diagnostic range for diabetes"
+            pp_status = "suggestive of diabetes range; confirm with a clinician"
         elif val >= 140.0:
             pp_status = "Prediabetes range"
         elif val < low_t or val < 70.0:
@@ -1176,7 +1206,7 @@ def step3_metabolic_risk_scoring(verified_json: Dict[str, Any]) -> Dict[str, Any
     if hba1c and hba1c.get("value") is not None:
         val = hba1c["value"]
         if val >= 6.5:
-            hba1c_status = "Diagnostic range for diabetes"
+            hba1c_status = "suggestive of diabetes range; confirm with a clinician"
         elif val >= 5.7:
             hba1c_status = "Prediabetes range"
         else:
@@ -1460,6 +1490,16 @@ def step4_metabolic_post_generation_audit(
 
     if verified_json.get("age") is not None:
         verified_numbers.add(float(verified_json["age"]))
+    if verified_json.get("mean_sbp") is not None:
+        verified_numbers.add(float(verified_json["mean_sbp"]))
+    if verified_json.get("mean_dbp") is not None:
+        verified_numbers.add(float(verified_json["mean_dbp"]))
+    for lk in ["total_cholesterol", "hdl", "ldl", "triglycerides"]:
+        item = verified_json.get(lk)
+        if item and item.get("value") is not None:
+            verified_numbers.add(float(item["value"]))
+    if verified_json.get("hemoglobin") is not None:
+        verified_numbers.add(float(verified_json["hemoglobin"]))
 
     # Add standard clinical threshold numbers that the prompt dictates using
     standard_cutoffs = {
@@ -1593,31 +1633,132 @@ def execute_metabolic_pipeline(raw_ocr_text: str, filename: str, file_bytes: Opt
     # STEP 4: Post-generation Audit Gate
     audit_res = step4_metabolic_post_generation_audit(verified_json, step3_res, filename)
 
-    # Supplementary Population Risk Model (Pima Indians Benchmark + Real SHAP)
-    # Kept strictly as a separate, complementary layer without merging into clinical thresholds
-    pima_population_model = None
-    try:
-        try:
-            from pima_model_service import predict_pima_diabetes_with_shap
-        except ImportError:
-            from ml_service.pima_model_service import predict_pima_diabetes_with_shap
-        pima_population_model = predict_pima_diabetes_with_shap(verified_json)
-    except Exception as pe:
-        logger.warning(f"Pima population model inference notice: {pe}")
+    # Wire to real diabetes_module two-tier model (FastAPI POST /predict)
+    tier1_fields = ['age', 'sex', 'bmi', 'mean_sbp', 'mean_dbp', 'high_bp', 'high_chol', 'smoker', 'phys_activity', 'family_history']
+    missing_tier1 = []
+    if verified_json.get("age") is None:
+        missing_tier1.append("age")
+    if verified_json.get("sex") is None:
+        missing_tier1.append("sex")
+    bmi_val = verified_json.get("bmi", {}).get("value")
+    if bmi_val is None:
+        missing_tier1.append("bmi")
+    if verified_json.get("mean_sbp") is None:
+        missing_tier1.append("mean_sbp")
+    if verified_json.get("mean_dbp") is None:
+        missing_tier1.append("mean_dbp")
+    if verified_json.get("high_bp") is None:
+        missing_tier1.append("high_bp")
+    if verified_json.get("high_chol") is None:
+        missing_tier1.append("high_chol")
+    if verified_json.get("smoker") is None:
+        missing_tier1.append("smoker")
+    if verified_json.get("phys_activity") is None:
+        missing_tier1.append("phys_activity")
+    if verified_json.get("family_history") is None:
+        missing_tier1.append("family_history")
+
+    diabetes_tier_prediction = None
+    if not missing_tier1:
+        sex_binary = 1 if "m" in (verified_json.get("sex") or "").lower() and "fe" not in (verified_json.get("sex") or "").lower() else 0
+        feats_dict = {
+            "age": float(verified_json["age"]),
+            "sex": sex_binary,
+            "bmi": float(bmi_val),
+            "mean_sbp": float(verified_json["mean_sbp"]),
+            "mean_dbp": float(verified_json["mean_dbp"]),
+            "high_bp": int(verified_json["high_bp"]),
+            "high_chol": int(verified_json["high_chol"]),
+            "smoker": int(verified_json["smoker"]),
+            "phys_activity": int(verified_json["phys_activity"]),
+            "family_history": int(verified_json["family_history"])
+        }
+        labs_dict = {}
+        hba1c_obj = verified_json.get("hba1c")
+        hba1c_val = hba1c_obj.get("value") if (hba1c_obj and isinstance(hba1c_obj, dict)) else None
+        if hba1c_val is not None and 3.0 <= float(hba1c_val) <= 18.0:
+            labs_dict["hba1c"] = float(hba1c_val)
+        fg_obj = verified_json.get("fasting_glucose")
+        fg_val = fg_obj.get("value") if (fg_obj and isinstance(fg_obj, dict)) else None
+        if fg_val is not None:
+            labs_dict["fasting_glucose"] = float(fg_val)
+
+        predict_payload = {
+            "features": feats_dict
+        }
+        if labs_dict:
+            predict_payload["labs"] = labs_dict
+        if hba1c_val is not None and 3.0 <= float(hba1c_val) <= 18.0:
+            predict_payload["hba1c"] = float(hba1c_val)
+
+        diabetes_svc = os.getenv("DIABETES_SERVICE_URL", "http://127.0.0.1:8005").rstrip("/")
+        ml_svc = os.getenv("ML_SERVICE_URL", "").rstrip("/")
+        if diabetes_svc:
+            try:
+                import urllib.request
+                req = urllib.request.Request(
+                    f"{diabetes_svc}/predict",
+                    data=json.dumps(predict_payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    diabetes_tier_prediction = json.loads(resp.read().decode("utf-8"))
+            except Exception as api_err:
+                pass
+        if diabetes_tier_prediction is None and ml_svc:
+            try:
+                import urllib.request
+                req = urllib.request.Request(
+                    f"{ml_svc}/diabetes/predict",
+                    data=json.dumps(predict_payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    diabetes_tier_prediction = json.loads(resp.read().decode("utf-8"))
+            except Exception:
+                pass
+        if diabetes_tier_prediction is None:
+            try:
+                import sys
+                from pathlib import Path
+                import importlib.util
+                dm_dir = Path(__file__).resolve().parent.parent / "diabetes_module" / "src"
+                if str(dm_dir) not in sys.path:
+                    sys.path.insert(0, str(dm_dir))
+                import train_and_evaluate
+                import __main__
+                __main__.TabularPreprocessor = train_and_evaluate.TabularPreprocessor
+                __main__.ProbabilityCalibrator = train_and_evaluate.ProbabilityCalibrator
+                if "diabetes_api_module" in sys.modules:
+                    dm_app = sys.modules["diabetes_api_module"]
+                else:
+                    spec = importlib.util.spec_from_file_location("diabetes_api_module", dm_dir / "app.py")
+                    dm_app = importlib.util.module_from_spec(spec)
+                    sys.modules["diabetes_api_module"] = dm_app
+                    spec.loader.exec_module(dm_app)
+                req_obj = dm_app.PredictRequest(
+                    features=dm_app.NonLabFeatures(**feats_dict),
+                    labs=dm_app.LabValues(**labs_dict) if labs_dict else None,
+                    hba1c=float(hba1c_val) if hba1c_val else None
+                )
+                diabetes_tier_prediction = dm_app.predict_diabetes_risk(req_obj)
+            except Exception as direct_err:
+                logger.error(f"Failed direct diabetes_module inference: {direct_err}")
 
     pipeline_result = {
         "success": audit_res["audit_passed"],
-        "pipeline_version": "metabolic_v1_ada_who",
+        "pipeline_version": "metabolic_v2_two_tier_ada_who",
         "pipeline_status": "APPROVED" if audit_res["audit_passed"] else "BLOCKED_FOR_REVIEW",
         "filename": filename,
         "fallback_used": step1_res.get("fallback_used", False),
-        "extraction_method": step1_res.get("extraction_method", "llm"),
-        "fallback_reason": step1_res.get("fallback_reason"),
+        "extraction_method": step1_res.get("extraction_method", "deterministic_clinical_extractor"),
         "step1_extraction": step1_res,
         "step2_verified_json": verified_json,
         "step3_risk_scoring": step3_res,
         "step4_audit": audit_res,
-        "pima_population_model": pima_population_model,
+        "raw_text": raw_ocr_text,
+        "diabetes_tier_prediction": diabetes_tier_prediction,
+        "missing_tier1_features": missing_tier1,
         # Direct convenience views for frontend UI
         "data_limited": step3_res.get("data_limited", False),
         "diabetes_assessment": step3_res["diabetes_assessment"],
@@ -1636,6 +1777,19 @@ def execute_metabolic_pipeline(raw_ocr_text: str, filename: str, file_bytes: Opt
             "bmi": verified_json.get("bmi"),
             "height_cm": verified_json.get("height_cm"),
             "weight_kg": verified_json.get("weight_kg"),
+            "mean_sbp": verified_json.get("mean_sbp"),
+            "mean_dbp": verified_json.get("mean_dbp"),
+            "blood_pressure": verified_json.get("blood_pressure"),
+            "total_cholesterol": verified_json.get("total_cholesterol"),
+            "hdl": verified_json.get("hdl"),
+            "ldl": verified_json.get("ldl"),
+            "triglycerides": verified_json.get("triglycerides"),
+            "high_bp": verified_json.get("high_bp"),
+            "high_chol": verified_json.get("high_chol"),
+            "smoker": verified_json.get("smoker"),
+            "phys_activity": verified_json.get("phys_activity"),
+            "family_history": verified_json.get("family_history"),
+            "hemoglobin": verified_json.get("hemoglobin"),
             "waist_circumference_cm": verified_json.get("waist_circumference_cm"),
             "age": verified_json.get("age"),
             "sex": verified_json.get("sex")

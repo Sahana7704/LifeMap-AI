@@ -1,0 +1,12 @@
+Feature Name,Type,NHANES Source,BRFSS Equivalent,Coding / Range,In Shared-7
+age,Continuous,RIDAGEYR,Age (13 buckets),18.0 - 80.0 years,Yes (Bucketized)
+sex,Binary,RIAGENDR,Sex,"1=Male, 0=Female",Yes
+bmi,Continuous,BMXBMI,BMI,12.0 - 67.3 kg/m2,Yes
+mean_sbp,Continuous,BPXSY1-4,Not available,Systolic BP mean (mmHg),No
+mean_dbp,Continuous,BPXDI1-4,Not available,Diastolic BP mean (mmHg),No
+high_bp,Binary,BPQ020,HighBP,"1=Told high BP, 0=No",Yes
+high_chol,Binary,BPQ080,HighChol,"1=Told high chol, 0=No",Yes
+smoker,Binary,SMQ020,Smoker,"1=100+ cigarettes, 0=No",Yes
+phys_activity,Binary,PAQ605/620/635/650/665,PhysActivity,"1=Active, 0=Inactive",Yes
+family_history,Binary,MCQ300C,Not available,"1=Close relative diabetes, 0=No",No
+hba1c (Tier 2),Continuous,LBXGH,Not available,Glycated hemoglobin (%),No

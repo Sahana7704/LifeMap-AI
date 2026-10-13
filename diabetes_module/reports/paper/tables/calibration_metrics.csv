@@ -1,0 +1,5 @@
+Model,Brier,ECE,Slope,Intercept
+Tier 1 XGBoost (Raw),0.1553,0.2043,0.9919,-1.7137
+Tier 1 Calibrated XGBoost,0.0921,0.0139,1.0101,0.0102
+Tier 2 XGBoost (Raw),0.0773,0.1123,1.0144,-1.669
+Tier 2 Calibrated XGBoost,0.0504,0.0143,0.9921,-0.0795

@@ -1,0 +1,13 @@
+HbA1c,model_used,raw_uncalibrated_xgboost_probability,calibrated_probability,calibration_step_value
+4.8,tier2_with_hba1c,0.3417,0.1493,0.1493
+5.1,tier2_with_hba1c,0.2997,0.0667,0.0667
+5.4,tier2_with_hba1c,0.2997,0.0667,0.0667
+5.7,tier2_with_hba1c,0.4878,0.4017,0.1493
+6.0,tier2_with_hba1c,0.5646,0.4579,0.1493
+6.1,tier2_with_hba1c,0.6162,0.4767,0.2901
+6.3,tier2_with_hba1c,0.7489,0.5142,0.2901
+6.5,tier2_with_hba1c,0.9107,0.68,0.6667
+6.8,tier2_with_hba1c,0.9685,0.8835,0.8835
+7.2,tier2_with_hba1c,0.9764,0.8835,0.8835
+8.0,tier2_with_hba1c,0.9886,0.9444,0.9444
+9.0,tier2_with_hba1c,0.9905,0.9468,0.9468

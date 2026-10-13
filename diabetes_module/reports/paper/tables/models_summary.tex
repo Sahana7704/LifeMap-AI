@@ -1,0 +1,12 @@
+\begin{tabular}{lllll}
+\toprule
+Model Name & Category & Tier 1 Features & Tier 2 Features & Key Hyperparameters \\
+\midrule
+Logistic Regression & Classical ML & 10 tabular features (Standardized & Imputed) & 11 features (10 tabular + HbA1c) & C=1.0, balanced class weight, L-BFGS \\
+Random Forest & Classical ML & 10 tabular features & 11 features & n_estimators=300, max_depth=12, balanced \\
+XGBoost & Classical ML (Boosted) & 10 tabular features & 11 features & depth=4, lr=0.04, scale_pos_weight=6.13, n=180 \\
+PyTorch MLP & Deep Learning & 10 tabular features & 11 features & 64-32-16 layers, BatchNorm, Dropout, BCEWithLogitsLoss \\
+Stacking Ensemble & Hybrid Ensemble & Meta-learner over LR, RF, XGB, MLP & Meta-learner over Tier 2 LR, RF, XGB, MLP & Logistic regression meta-learner \\
+Final Calibrated XGBoost & Calibrated Deployed & 10 tabular features & 11 features & XGBoost + Isotonic regression calibration \\
+\bottomrule
+\end{tabular}

@@ -21,18 +21,18 @@ export function getApiBaseUrl(): string {
     throw new Error('NEXT_PUBLIC_API_URL environment variable is required in production with no localhost fallback.');
   }
 
-  // 2. Local development fallback
-  if (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')) {
-    return 'http://localhost:5000/api';
-  }
-
-  // 3. Browser on local network
+  // 2. Relative proxy path if window is defined in browser
   if (typeof window !== 'undefined') {
     return '/api';
   }
 
-  // 4. Local SSR development fallback
-  return 'http://127.0.0.1:5000/api';
+  // 3. Server-side rendering fallback to configured environment variable
+  const fallbackUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL;
+  if (fallbackUrl) {
+    return fallbackUrl.replace(/\/+$/, '');
+  }
+
+  return '/api';
 }
 
 export const API_URL = getApiBaseUrl();
@@ -72,10 +72,13 @@ export const api = {
   // Predictions
   runPrediction: (payload: any) =>
     axios.post(`${API_URL}/predictions/run`, payload, { headers: getAuthHeaders() }),
+  predictDiabetesTier: (payload: any) =>
+    axios.post(`${API_URL}/predictions/diabetes-tier`, payload, { headers: getAuthHeaders() }),
   getLatestPrediction: () =>
     axios.get(`${API_URL}/predictions/latest`, { headers: getAuthHeaders() }),
   getPredictionHistory: () =>
     axios.get(`${API_URL}/predictions/history`, { headers: getAuthHeaders() }),
+
 
   // Reports
   uploadReport: (file: File) => {

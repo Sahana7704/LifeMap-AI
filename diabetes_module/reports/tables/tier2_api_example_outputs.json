@@ -1,0 +1,650 @@
+[
+  {
+    "scenario": "Call 1: No HbA1c (Pure Tier 1 Request)",
+    "status_code": 200,
+    "payload": {
+      "features": {
+        "age": 52.0,
+        "sex": 1,
+        "bmi": 29.4,
+        "mean_sbp": 134.0,
+        "mean_dbp": 86.0,
+        "high_bp": 1,
+        "high_chol": 1,
+        "smoker": 0,
+        "phys_activity": 1,
+        "family_history": 1
+      }
+    },
+    "response": {
+      "status": "success",
+      "model_used": "tier1_no_labs",
+      "predicted_probability": 0.3556,
+      "model_probability": 0.3556,
+      "percentage_risk": "35.6%",
+      "base_risk_level": "Moderate",
+      "model_risk_level": "Moderate",
+      "lab_status": "not provided",
+      "final_risk_level": "Moderate",
+      "escalation_notes": "ML-predicted risk level maintained; probability was not changed by lab values.",
+      "top_5_shap_contributions": [
+        {
+          "feature": "Family History of Diabetes",
+          "shap_value": 0.6104999780654907,
+          "impact": "Increases Risk",
+          "magnitude": 0.6104999780654907
+        },
+        {
+          "feature": "Diastolic Blood Pressure (mmHg)",
+          "shap_value": -0.5080000162124634,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.5080000162124634
+        },
+        {
+          "feature": "History of High Blood Pressure",
+          "shap_value": 0.33320000767707825,
+          "impact": "Increases Risk",
+          "magnitude": 0.33320000767707825
+        },
+        {
+          "feature": "Age (years)",
+          "shap_value": 0.28200000524520874,
+          "impact": "Increases Risk",
+          "magnitude": 0.28200000524520874
+        },
+        {
+          "feature": "History of High Cholesterol",
+          "shap_value": 0.26350000500679016,
+          "impact": "Increases Risk",
+          "magnitude": 0.26350000500679016
+        }
+      ],
+      "all_shap_contributions": [
+        {
+          "feature": "Family History of Diabetes",
+          "shap_value": 0.6104999780654907,
+          "impact": "Increases Risk",
+          "magnitude": 0.6104999780654907
+        },
+        {
+          "feature": "Diastolic Blood Pressure (mmHg)",
+          "shap_value": -0.5080000162124634,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.5080000162124634
+        },
+        {
+          "feature": "History of High Blood Pressure",
+          "shap_value": 0.33320000767707825,
+          "impact": "Increases Risk",
+          "magnitude": 0.33320000767707825
+        },
+        {
+          "feature": "Age (years)",
+          "shap_value": 0.28200000524520874,
+          "impact": "Increases Risk",
+          "magnitude": 0.28200000524520874
+        },
+        {
+          "feature": "History of High Cholesterol",
+          "shap_value": 0.26350000500679016,
+          "impact": "Increases Risk",
+          "magnitude": 0.26350000500679016
+        },
+        {
+          "feature": "Sex (Male/Female)",
+          "shap_value": 0.12319999933242798,
+          "impact": "Increases Risk",
+          "magnitude": 0.12319999933242798
+        },
+        {
+          "feature": "Physical Activity",
+          "shap_value": -0.06539999693632126,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.06539999693632126
+        },
+        {
+          "feature": "BMI (kg/m^2)",
+          "shap_value": -0.028699999675154686,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.028699999675154686
+        },
+        {
+          "feature": "Systolic Blood Pressure (mmHg)",
+          "shap_value": 0.012299999594688416,
+          "impact": "Increases Risk",
+          "magnitude": 0.012299999594688416
+        },
+        {
+          "feature": "Smoking History",
+          "shap_value": -0.004100000020116568,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.004100000020116568
+        }
+      ],
+      "laboratory_assessment": {
+        "hba1c_value": "not provided",
+        "hba1c_category": "not provided",
+        "fasting_glucose_value": "not provided",
+        "fasting_glucose_category": "not provided",
+        "overall_lab_status": "not provided",
+        "escalation_recommended": false,
+        "escalation_reason": "No laboratory values provided."
+      },
+      "lifestyle_recommendations": [
+        {
+          "trigger": "Elevated BMI (29.4 kg/m^2)",
+          "advice": "A structured weight management plan targeting a 5-7% reduction in body weight has been shown to reduce type 2 diabetes incidence by up to 58% in clinical trials."
+        },
+        {
+          "trigger": "Elevated Blood Pressure (134/86 mmHg)",
+          "advice": "Adopt dietary patterns rich in whole grains, potassium, and magnesium (such as the DASH diet) and reduce dietary sodium intake below 2,300 mg/day."
+        },
+        {
+          "trigger": "History of Dyslipidemia / High Cholesterol",
+          "advice": "Prioritize soluble dietary fiber (oats, legumes, flaxseeds) and reduce saturated fats to improve lipid profiles and insulin sensitivity."
+        }
+      ],
+      "disclaimer": "DISCLAIMER: LifeMap AI provides probabilistic risk assessment and lifestyle recommendations for educational and preventive wellness purposes only. It is not intended as medical diagnosis, treatment, or clinical advice. Consult a qualified healthcare professional for formal diagnosis."
+    }
+  },
+  {
+    "scenario": "Call 2: Normal HbA1c (Tier 2, 5.2%)",
+    "status_code": 200,
+    "payload": {
+      "features": {
+        "age": 52.0,
+        "sex": 1,
+        "bmi": 29.4,
+        "mean_sbp": 134.0,
+        "mean_dbp": 86.0,
+        "high_bp": 1,
+        "high_chol": 1,
+        "smoker": 0,
+        "phys_activity": 1,
+        "family_history": 1
+      },
+      "hba1c": 5.2
+    },
+    "response": {
+      "status": "success",
+      "model_used": "tier2_with_hba1c",
+      "predicted_probability": 0.0508,
+      "model_probability": 0.0508,
+      "percentage_risk": "5.1%",
+      "base_risk_level": "Low",
+      "model_risk_level": "Low",
+      "lab_status": "normal",
+      "final_risk_level": "Low",
+      "escalation_notes": "ML-predicted risk level maintained; probability was not changed by lab values.",
+      "top_5_shap_contributions": [
+        {
+          "feature": "Glycated Hemoglobin (HbA1c, %)",
+          "shap_value": -2.1212000846862793,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 2.1212000846862793
+        },
+        {
+          "feature": "History of High Blood Pressure",
+          "shap_value": 0.61080002784729,
+          "impact": "Increases Risk",
+          "magnitude": 0.61080002784729
+        },
+        {
+          "feature": "Family History of Diabetes",
+          "shap_value": 0.5583000183105469,
+          "impact": "Increases Risk",
+          "magnitude": 0.5583000183105469
+        },
+        {
+          "feature": "Diastolic Blood Pressure (mmHg)",
+          "shap_value": -0.48660001158714294,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.48660001158714294
+        },
+        {
+          "feature": "History of High Cholesterol",
+          "shap_value": 0.25380000472068787,
+          "impact": "Increases Risk",
+          "magnitude": 0.25380000472068787
+        }
+      ],
+      "all_shap_contributions": [
+        {
+          "feature": "Glycated Hemoglobin (HbA1c, %)",
+          "shap_value": -2.1212000846862793,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 2.1212000846862793
+        },
+        {
+          "feature": "History of High Blood Pressure",
+          "shap_value": 0.61080002784729,
+          "impact": "Increases Risk",
+          "magnitude": 0.61080002784729
+        },
+        {
+          "feature": "Family History of Diabetes",
+          "shap_value": 0.5583000183105469,
+          "impact": "Increases Risk",
+          "magnitude": 0.5583000183105469
+        },
+        {
+          "feature": "Diastolic Blood Pressure (mmHg)",
+          "shap_value": -0.48660001158714294,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.48660001158714294
+        },
+        {
+          "feature": "History of High Cholesterol",
+          "shap_value": 0.25380000472068787,
+          "impact": "Increases Risk",
+          "magnitude": 0.25380000472068787
+        },
+        {
+          "feature": "Sex (Male/Female)",
+          "shap_value": 0.10660000145435333,
+          "impact": "Increases Risk",
+          "magnitude": 0.10660000145435333
+        },
+        {
+          "feature": "Age (years)",
+          "shap_value": -0.07349999994039536,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.07349999994039536
+        },
+        {
+          "feature": "Physical Activity",
+          "shap_value": -0.06260000169277191,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.06260000169277191
+        },
+        {
+          "feature": "Systolic Blood Pressure (mmHg)",
+          "shap_value": -0.03819999843835831,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.03819999843835831
+        },
+        {
+          "feature": "Smoking History",
+          "shap_value": -0.029100000858306885,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.029100000858306885
+        },
+        {
+          "feature": "BMI (kg/m^2)",
+          "shap_value": -0.022600000724196434,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.022600000724196434
+        }
+      ],
+      "laboratory_assessment": {
+        "hba1c_value": "5.2%",
+        "hba1c_category": "Normal (< 5.7%)",
+        "fasting_glucose_value": "not provided",
+        "fasting_glucose_category": "not provided",
+        "overall_lab_status": "normal",
+        "escalation_recommended": false,
+        "escalation_reason": "All provided lab values are within standard physiological reference ranges."
+      },
+      "lifestyle_recommendations": [
+        {
+          "trigger": "Elevated BMI (29.4 kg/m^2)",
+          "advice": "A structured weight management plan targeting a 5-7% reduction in body weight has been shown to reduce type 2 diabetes incidence by up to 58% in clinical trials."
+        },
+        {
+          "trigger": "Elevated Blood Pressure (134/86 mmHg)",
+          "advice": "Adopt dietary patterns rich in whole grains, potassium, and magnesium (such as the DASH diet) and reduce dietary sodium intake below 2,300 mg/day."
+        },
+        {
+          "trigger": "History of Dyslipidemia / High Cholesterol",
+          "advice": "Prioritize soluble dietary fiber (oats, legumes, flaxseeds) and reduce saturated fats to improve lipid profiles and insulin sensitivity."
+        }
+      ],
+      "disclaimer": "DISCLAIMER: LifeMap AI provides probabilistic risk assessment and lifestyle recommendations for educational and preventive wellness purposes only. It is not intended as medical diagnosis, treatment, or clinical advice. Consult a qualified healthcare professional for formal diagnosis."
+    }
+  },
+  {
+    "scenario": "Call 3: Prediabetic HbA1c (Tier 2, 5.9%)",
+    "status_code": 200,
+    "payload": {
+      "features": {
+        "age": 52.0,
+        "sex": 1,
+        "bmi": 29.4,
+        "mean_sbp": 134.0,
+        "mean_dbp": 86.0,
+        "high_bp": 1,
+        "high_chol": 1,
+        "smoker": 0,
+        "phys_activity": 1,
+        "family_history": 1
+      },
+      "hba1c": 5.9
+    },
+    "response": {
+      "status": "success",
+      "model_used": "tier2_with_hba1c",
+      "predicted_probability": 0.1493,
+      "model_probability": 0.1493,
+      "percentage_risk": "14.9%",
+      "base_risk_level": "Low",
+      "model_risk_level": "Low",
+      "lab_status": "prediabetes range",
+      "final_risk_level": "Moderate",
+      "escalation_notes": "Risk level raised from Low to Moderate by clinical lab rule (prediabetes range); model probability (0.1493) was not changed.",
+      "top_5_shap_contributions": [
+        {
+          "feature": "Glycated Hemoglobin (HbA1c, %)",
+          "shap_value": -0.6506999731063843,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.6506999731063843
+        },
+        {
+          "feature": "Diastolic Blood Pressure (mmHg)",
+          "shap_value": -0.6389999985694885,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.6389999985694885
+        },
+        {
+          "feature": "Family History of Diabetes",
+          "shap_value": 0.4368000030517578,
+          "impact": "Increases Risk",
+          "magnitude": 0.4368000030517578
+        },
+        {
+          "feature": "History of High Blood Pressure",
+          "shap_value": 0.275299996137619,
+          "impact": "Increases Risk",
+          "magnitude": 0.275299996137619
+        },
+        {
+          "feature": "History of High Cholesterol",
+          "shap_value": 0.2721000015735626,
+          "impact": "Increases Risk",
+          "magnitude": 0.2721000015735626
+        }
+      ],
+      "all_shap_contributions": [
+        {
+          "feature": "Glycated Hemoglobin (HbA1c, %)",
+          "shap_value": -0.6506999731063843,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.6506999731063843
+        },
+        {
+          "feature": "Diastolic Blood Pressure (mmHg)",
+          "shap_value": -0.6389999985694885,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.6389999985694885
+        },
+        {
+          "feature": "Family History of Diabetes",
+          "shap_value": 0.4368000030517578,
+          "impact": "Increases Risk",
+          "magnitude": 0.4368000030517578
+        },
+        {
+          "feature": "History of High Blood Pressure",
+          "shap_value": 0.275299996137619,
+          "impact": "Increases Risk",
+          "magnitude": 0.275299996137619
+        },
+        {
+          "feature": "History of High Cholesterol",
+          "shap_value": 0.2721000015735626,
+          "impact": "Increases Risk",
+          "magnitude": 0.2721000015735626
+        },
+        {
+          "feature": "Sex (Male/Female)",
+          "shap_value": 0.09200000017881393,
+          "impact": "Increases Risk",
+          "magnitude": 0.09200000017881393
+        },
+        {
+          "feature": "Physical Activity",
+          "shap_value": -0.07450000196695328,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.07450000196695328
+        },
+        {
+          "feature": "BMI (kg/m^2)",
+          "shap_value": -0.05829999968409538,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.05829999968409538
+        },
+        {
+          "feature": "Age (years)",
+          "shap_value": -0.05620000138878822,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.05620000138878822
+        },
+        {
+          "feature": "Smoking History",
+          "shap_value": -0.04749999940395355,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.04749999940395355
+        },
+        {
+          "feature": "Systolic Blood Pressure (mmHg)",
+          "shap_value": -0.019099999219179153,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.019099999219179153
+        }
+      ],
+      "laboratory_assessment": {
+        "hba1c_value": "5.9%",
+        "hba1c_category": "Prediabetes (5.7 - 6.4%)",
+        "fasting_glucose_value": "not provided",
+        "fasting_glucose_category": "not provided",
+        "overall_lab_status": "prediabetes range",
+        "escalation_recommended": true,
+        "escalation_reason": "Elevated glycemic marker detected (HbA1c 5.7-6.4% or Glucose 100-125 mg/dL); confirm with a clinician."
+      },
+      "lifestyle_recommendations": [
+        {
+          "trigger": "Elevated BMI (29.4 kg/m^2)",
+          "advice": "A structured weight management plan targeting a 5-7% reduction in body weight has been shown to reduce type 2 diabetes incidence by up to 58% in clinical trials."
+        },
+        {
+          "trigger": "Elevated Blood Pressure (134/86 mmHg)",
+          "advice": "Adopt dietary patterns rich in whole grains, potassium, and magnesium (such as the DASH diet) and reduce dietary sodium intake below 2,300 mg/day."
+        },
+        {
+          "trigger": "History of Dyslipidemia / High Cholesterol",
+          "advice": "Prioritize soluble dietary fiber (oats, legumes, flaxseeds) and reduce saturated fats to improve lipid profiles and insulin sensitivity."
+        }
+      ],
+      "disclaimer": "DISCLAIMER: LifeMap AI provides probabilistic risk assessment and lifestyle recommendations for educational and preventive wellness purposes only. It is not intended as medical diagnosis, treatment, or clinical advice. Consult a qualified healthcare professional for formal diagnosis."
+    }
+  },
+  {
+    "scenario": "Call 4: Diabetic-range HbA1c (Tier 2, 8.5%)",
+    "status_code": 200,
+    "payload": {
+      "features": {
+        "age": 52.0,
+        "sex": 1,
+        "bmi": 29.4,
+        "mean_sbp": 134.0,
+        "mean_dbp": 86.0,
+        "high_bp": 1,
+        "high_chol": 1,
+        "smoker": 0,
+        "phys_activity": 1,
+        "family_history": 1
+      },
+      "hba1c": 8.5
+    },
+    "response": {
+      "status": "success",
+      "model_used": "tier2_with_hba1c",
+      "predicted_probability": 0.9444,
+      "model_probability": 0.9444,
+      "percentage_risk": "94.4%",
+      "base_risk_level": "High",
+      "model_risk_level": "High",
+      "lab_status": "suggestive of diabetes range; confirm with a clinician",
+      "final_risk_level": "High",
+      "escalation_notes": "ML-predicted risk level maintained; probability was not changed by lab values.",
+      "top_5_shap_contributions": [
+        {
+          "feature": "Glycated Hemoglobin (HbA1c, %)",
+          "shap_value": 3.9677999019622803,
+          "impact": "Increases Risk",
+          "magnitude": 3.9677999019622803
+        },
+        {
+          "feature": "Diastolic Blood Pressure (mmHg)",
+          "shap_value": -0.40709999203681946,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.40709999203681946
+        },
+        {
+          "feature": "History of High Blood Pressure",
+          "shap_value": 0.3596000075340271,
+          "impact": "Increases Risk",
+          "magnitude": 0.3596000075340271
+        },
+        {
+          "feature": "Family History of Diabetes",
+          "shap_value": 0.32330000400543213,
+          "impact": "Increases Risk",
+          "magnitude": 0.32330000400543213
+        },
+        {
+          "feature": "History of High Cholesterol",
+          "shap_value": 0.2581999897956848,
+          "impact": "Increases Risk",
+          "magnitude": 0.2581999897956848
+        }
+      ],
+      "all_shap_contributions": [
+        {
+          "feature": "Glycated Hemoglobin (HbA1c, %)",
+          "shap_value": 3.9677999019622803,
+          "impact": "Increases Risk",
+          "magnitude": 3.9677999019622803
+        },
+        {
+          "feature": "Diastolic Blood Pressure (mmHg)",
+          "shap_value": -0.40709999203681946,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.40709999203681946
+        },
+        {
+          "feature": "History of High Blood Pressure",
+          "shap_value": 0.3596000075340271,
+          "impact": "Increases Risk",
+          "magnitude": 0.3596000075340271
+        },
+        {
+          "feature": "Family History of Diabetes",
+          "shap_value": 0.32330000400543213,
+          "impact": "Increases Risk",
+          "magnitude": 0.32330000400543213
+        },
+        {
+          "feature": "History of High Cholesterol",
+          "shap_value": 0.2581999897956848,
+          "impact": "Increases Risk",
+          "magnitude": 0.2581999897956848
+        },
+        {
+          "feature": "Sex (Male/Female)",
+          "shap_value": 0.1387999951839447,
+          "impact": "Increases Risk",
+          "magnitude": 0.1387999951839447
+        },
+        {
+          "feature": "Age (years)",
+          "shap_value": -0.04740000143647194,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.04740000143647194
+        },
+        {
+          "feature": "Smoking History",
+          "shap_value": -0.033799998462200165,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.033799998462200165
+        },
+        {
+          "feature": "Physical Activity",
+          "shap_value": -0.021700000390410423,
+          "impact": "Protective (Decreases Risk)",
+          "magnitude": 0.021700000390410423
+        },
+        {
+          "feature": "Systolic Blood Pressure (mmHg)",
+          "shap_value": 0.00930000003427267,
+          "impact": "Increases Risk",
+          "magnitude": 0.00930000003427267
+        },
+        {
+          "feature": "BMI (kg/m^2)",
+          "shap_value": 0.002899999963119626,
+          "impact": "Increases Risk",
+          "magnitude": 0.002899999963119626
+        }
+      ],
+      "laboratory_assessment": {
+        "hba1c_value": "8.5%",
+        "hba1c_category": "suggestive of diabetes range; confirm with a clinician",
+        "fasting_glucose_value": "not provided",
+        "fasting_glucose_category": "not provided",
+        "overall_lab_status": "suggestive of diabetes range; confirm with a clinician",
+        "escalation_recommended": true,
+        "escalation_reason": "Diagnostic threshold met (HbA1c >= 6.5% or Fasting Glucose >= 126 mg/dL); suggestive of diabetes range; confirm with a clinician."
+      },
+      "lifestyle_recommendations": [
+        {
+          "trigger": "Elevated BMI (29.4 kg/m^2)",
+          "advice": "A structured weight management plan targeting a 5-7% reduction in body weight has been shown to reduce type 2 diabetes incidence by up to 58% in clinical trials."
+        },
+        {
+          "trigger": "Elevated Blood Pressure (134/86 mmHg)",
+          "advice": "Adopt dietary patterns rich in whole grains, potassium, and magnesium (such as the DASH diet) and reduce dietary sodium intake below 2,300 mg/day."
+        },
+        {
+          "trigger": "History of Dyslipidemia / High Cholesterol",
+          "advice": "Prioritize soluble dietary fiber (oats, legumes, flaxseeds) and reduce saturated fats to improve lipid profiles and insulin sensitivity."
+        }
+      ],
+      "disclaimer": "DISCLAIMER: LifeMap AI provides probabilistic risk assessment and lifestyle recommendations for educational and preventive wellness purposes only. It is not intended as medical diagnosis, treatment, or clinical advice. Consult a qualified healthcare professional for formal diagnosis."
+    }
+  },
+  {
+    "scenario": "Call 5: Invalid HbA1c (Tier 2, 25.0% - Out of Range)",
+    "status_code": 422,
+    "payload": {
+      "features": {
+        "age": 52.0,
+        "sex": 1,
+        "bmi": 29.4,
+        "mean_sbp": 134.0,
+        "mean_dbp": 86.0,
+        "high_bp": 1,
+        "high_chol": 1,
+        "smoker": 0,
+        "phys_activity": 1,
+        "family_history": 1
+      },
+      "hba1c": 25.0
+    },
+    "response": {
+      "detail": [
+        {
+          "type": "value_error",
+          "loc": [
+            "body",
+            "hba1c"
+          ],
+          "msg": "Value error, hba1c if provided must be between 3.0% and 18.0%",
+          "input": 25.0,
+          "ctx": {
+            "error": {}
+          }
+        }
+      ]
+    }
+  }
+]

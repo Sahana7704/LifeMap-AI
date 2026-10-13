@@ -1,0 +1,23 @@
+{
+  "dataset": "Pima Indians Diabetes",
+  "n_samples": 768,
+  "n_features": 8,
+  "features": [
+    "Pregnancies",
+    "Glucose",
+    "BloodPressure",
+    "SkinThickness",
+    "Insulin",
+    "BMI",
+    "DiabetesPedigreeFunction",
+    "Age"
+  ],
+  "accuracy": 0.7532467532467533,
+  "balanced_accuracy": 0.7333333333333334,
+  "precision": 0.6428571428571429,
+  "recall": 0.6666666666666666,
+  "f1": 0.6545454545454545,
+  "roc_auc": 0.8214814814814815,
+  "pr_auc": 0.725454194584976,
+  "brier_score": 0.1654642857142857
+}

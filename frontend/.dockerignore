@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+.gitignore
+.env*
+*.env
+data/
+archive/
+reports/
+notebooks/
+*venv*/
+npm-debug.log*

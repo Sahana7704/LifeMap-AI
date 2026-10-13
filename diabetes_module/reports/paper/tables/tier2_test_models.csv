@@ -1,0 +1,8 @@
+Model,Accuracy,Precision,Recall,F1,ROC-AUC
+Baseline: Predict everyone healthy,0.857,0.0,0.0,0.0,0.5
+Baseline: HbA1c >= 6.5% rule,0.932,0.806,0.693,0.745,0.833
+Logistic Regression,0.91,0.638,0.851,0.729,0.944
+Random Forest,0.918,0.671,0.833,0.743,0.949
+XGBoost,0.923,0.692,0.827,0.754,0.949
+MLP (Deep Learning),0.921,0.679,0.842,0.752,0.95
+Stacking Ensemble (Hybrid),0.917,0.666,0.839,0.743,0.951

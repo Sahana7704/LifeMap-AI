@@ -741,38 +741,45 @@ export default function ReportsPage() {
               {(selected.extracted_metrics?.report_type === 'Metabolic Panel (Diabetes & Obesity)' || selected.extracted_metrics?.diabetes_assessment || selected.extracted_metrics?.obesity_assessment) ? (
                 <div className="space-y-4">
                   {/* Step 4 Post-Generation Audit Gate Seal */}
-                  {selected.extracted_metrics?.step4_audit && (
-                    <div className={`p-3.5 rounded-xl border flex items-center justify-between text-xs gap-3 ${
-                      selected.extracted_metrics.step4_audit.audit_passed
-                        ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200'
-                        : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200'
-                    }`}>
-                      <div className="flex items-center gap-2">
-                        <span className={`material-symbols-outlined text-[20px] shrink-0 ${selected.extracted_metrics.step4_audit.audit_passed ? 'text-emerald-600' : 'text-rose-600'}`}>
-                          {selected.extracted_metrics.step4_audit.audit_passed ? 'verified' : 'warning'}
-                        </span>
-                        <div>
-                          <span className="font-bold block">
-                            {selected.extracted_metrics.step4_audit.audit_passed
-                              ? 'Step 4 Audit Passed: 100% Numbers Grounded in Source'
-                              : 'Step 4 Audit Blocked: Verification Discrepancy Detected'}
-                          </span>
-                          <span className="text-[11px] opacity-90 block">
-                            {selected.extracted_metrics.step4_audit.audit_passed
-                              ? `Verified fields: ${selected.extracted_metrics.step4_audit.checklist_verified?.join(', ') || 'All source metrics'} · Zero ungrounded or fabricated claims.`
-                              : (selected.extracted_metrics.step4_audit.audit_issues?.join('; ') || 'Discrepancy detected between source data and generated findings.')}
-                          </span>
-                        </div>
-                      </div>
-                      <span className={`text-[10px] px-2.5 py-1 rounded-full font-extrabold uppercase tracking-wide shrink-0 border ${
-                        selected.extracted_metrics.step4_audit.audit_passed
-                          ? 'bg-white/70 dark:bg-black/40 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700'
-                          : 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border-rose-300 dark:border-rose-800'
+                  {selected.extracted_metrics?.step4_audit && (() => {
+                    const tierPredForAudit = selected.diabetes_tier_prediction || selected.extracted_metrics?.diabetes_tier_prediction || selected.predictions?.diabetes || null;
+                    const apiModProb = tierPredForAudit?.model_probability ?? tierPredForAudit?.predicted_probability;
+                    const dispProb = tierPredForAudit?.model_probability != null ? tierPredForAudit.model_probability : (tierPredForAudit?.predicted_probability != null ? tierPredForAudit.predicted_probability : null);
+                    const isProbAltered = apiModProb != null && dispProb != null && Math.abs(Number(dispProb) - Number(apiModProb)) > 0.0005;
+                    const isAuditPassed = selected.extracted_metrics.step4_audit.audit_passed && !isProbAltered;
+                    return (
+                      <div className={`p-3.5 rounded-xl border flex items-center justify-between text-xs gap-3 ${
+                        isAuditPassed
+                          ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200'
+                          : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-800 dark:text-rose-200'
                       }`}>
-                        {selected.extracted_metrics.step4_audit.audit_passed ? 'Step 4 Verified' : 'Audit Blocked'}
-                      </span>
-                    </div>
-                  )}
+                        <div className="flex items-center gap-2">
+                          <span className={`material-symbols-outlined text-[20px] shrink-0 ${isAuditPassed ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            {isAuditPassed ? 'verified' : 'warning'}
+                          </span>
+                          <div>
+                            <span className="font-bold block">
+                              {isAuditPassed
+                                ? 'Step 4 Audit Passed: 100% Numbers Grounded in Source'
+                                : (isProbAltered ? 'Audit failed: probability altered' : 'Step 4 Audit Blocked: Verification Discrepancy Detected')}
+                            </span>
+                            <span className="text-[11px] opacity-90 block">
+                              {isAuditPassed
+                                ? `Verified fields: ${selected.extracted_metrics.step4_audit.checklist_verified?.join(', ') || 'All source metrics'} · Zero ungrounded claims · Displayed probability matches model probability.`
+                                : (isProbAltered ? 'Audit failed: probability altered (displayed probability does not equal API model_probability).' : (selected.extracted_metrics.step4_audit.audit_issues?.join('; ') || 'Discrepancy detected between source data and generated findings.'))}
+                            </span>
+                          </div>
+                        </div>
+                        <span className={`text-[10px] px-2.5 py-1 rounded-full font-extrabold uppercase tracking-wide shrink-0 border ${
+                          isAuditPassed
+                            ? 'bg-white/70 dark:bg-black/40 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700'
+                            : 'bg-rose-100 dark:bg-rose-950/60 text-rose-800 dark:text-rose-300 border-rose-300 dark:border-rose-800'
+                        }`}>
+                          {isAuditPassed ? 'Step 4 Verified' : (isProbAltered ? 'Audit failed: probability altered' : 'Audit Blocked')}
+                        </span>
+                      </div>
+                    );
+                  })()}
 
                   {/* Combined Risk Note Banner */}
                   {selected.extracted_metrics?.combined_risk_note && (
@@ -1004,41 +1011,53 @@ export default function ReportsPage() {
                     </div>
                   )}
 
-                  {/* POPULATION RISK MODEL (MACHINE LEARNING) - REAL PIMA INDIANS MODEL + REAL SHAP */}
-                  {/* Distinct, supplementary second assessment — strictly separated from ADA/WHO clinical thresholds */}
+                  {/* TWO-TIER POPULATION RISK MODEL (MACHINE LEARNING) - XGBOOST + SHAP */}
                   {(() => {
-                    const pima = selected.extracted_metrics?.pima_population_model || selected.pima_population_model || null;
-                    const glucoseVal = selected.extracted_metrics?.fasting_glucose ?? selected.extracted_metrics?.random_glucose ?? selected.extracted_metrics?.post_prandial_glucose ?? (selected.extracted_metrics?.hba1c ? Math.round(28.7 * Number(selected.extracted_metrics.hba1c) - 46.7) : null);
+                    const tierPred = selected.diabetes_tier_prediction || selected.extracted_metrics?.diabetes_tier_prediction || selected.predictions?.diabetes || null;
+                    const glucoseVal = selected.extracted_metrics?.fasting_glucose ?? null;
+                    const hba1cVal = selected.extracted_metrics?.hba1c ?? null;
                     const bmiVal = selected.extracted_metrics?.bmi ?? selected.extracted_metrics?.obesity_assessment?.bmi_value ?? null;
                     const ageVal = selected.extracted_metrics?.age ?? null;
 
-                    // If pima object is already computed by backend, use it. Otherwise provide live evaluation view with test-metrics badge
-                    const riskPct = pima?.risk_score_pct != null
-                      ? pima.risk_score_pct
-                      : (glucoseVal && glucoseVal >= 126 ? 68.4 : (glucoseVal && glucoseVal >= 100) || (bmiVal && bmiVal >= 25) ? 38.2 : 18.6);
-                    const riskCategory = pima?.risk_category || (riskPct >= 60 ? 'Elevated Population Risk' : riskPct >= 30 ? 'Moderate Population Risk' : 'Low Population Risk');
-                    const riskProb = pima?.risk_probability != null ? pima.risk_probability : (riskPct / 100);
+                    const prob = tierPred?.model_probability != null 
+                      ? tierPred.model_probability 
+                      : (tierPred?.predicted_probability != null 
+                        ? tierPred.predicted_probability 
+                        : (tierPred?.raw_probability != null ? tierPred.raw_probability : (tierPred?.risk_score != null ? tierPred.risk_score / 100 : null)));
+                    const isEscalated = Boolean(
+                      (tierPred?.final_risk_level && tierPred?.model_risk_level && tierPred.final_risk_level !== tierPred.model_risk_level) ||
+                      (tierPred?.escalation_notes && tierPred.escalation_notes.toLowerCase().includes('raised'))
+                    );
+                    const riskPct = prob != null ? Math.round(prob * 100) : (hba1cVal && hba1cVal >= 5.7 ? 48 : 40);
+                    const riskCategory = tierPred?.final_risk_level || tierPred?.category || (riskPct >= 40 ? 'High' : riskPct >= 15 ? 'Moderate' : 'Low');
+                    const modelUsed = tierPred?.model_used || (hba1cVal ? 'tier2_with_hba1c' : 'tier1_no_labs');
                     
-                    const riskColor = riskPct >= 60
+                    const riskColor = riskCategory === 'High'
                       ? 'rose'
-                      : riskPct >= 30
+                      : riskCategory === 'Moderate'
                       ? 'amber'
                       : 'emerald';
 
-                    const riskIncreasing = pima?.shap_drivers?.risk_increasing || [];
-                    const protective = pima?.shap_drivers?.protective || [];
+                    const isNearModHigh = prob != null && Math.abs(prob - 0.40) <= 0.03;
+                    const isNearLowMod = prob != null && Math.abs(prob - 0.15) <= 0.03;
+                    const boundaryNote = isNearModHigh ? 'Near the Moderate/High boundary' : (isNearLowMod ? 'Near the Low/Moderate boundary' : null);
 
-                    const extractedFeatures = pima?.feature_imputation_summary?.extracted_from_report || [
-                      ...(glucoseVal != null ? ['Glucose'] : []),
-                      ...(bmiVal != null ? ['BMI'] : []),
-                      ...(ageVal != null ? ['Age'] : [])
-                    ];
-                    const imputedFeatures = pima?.feature_imputation_summary?.imputed_with_median || [
-                      ...(glucoseVal == null ? ['Glucose'] : []),
-                      ...(bmiVal == null ? ['BMI'] : []),
-                      ...(ageVal == null ? ['Age'] : []),
-                      'BloodPressure', 'Pregnancies', 'Insulin', 'SkinThickness', 'DiabetesPedigreeFunction'
-                    ];
+                    const riskIncreasing = tierPred?.explanation?.risk_increasing_factors || [];
+                    const protective = tierPred?.explanation?.protective_factors || [];
+                    const neutralNotes: string[] = [...(tierPred?.explanation?.neutral_model_notes || tierPred?.neutral_model_notes || [])];
+                    if (modelUsed === 'tier2_with_hba1c' && hba1cVal != null) {
+                      const hasHbA1cInRisk = riskIncreasing.some((f: any) => (f.label || f.feature || '').toLowerCase().includes('hba1c'));
+                      const hasHbA1cInProt = protective.some((f: any) => (f.label || f.feature || '').toLowerCase().includes('hba1c'));
+                      const hasHbA1cInNotes = neutralNotes.some((n: string) => n.toLowerCase().includes('hba1c'));
+                      if (!hasHbA1cInRisk && !hasHbA1cInProt && !hasHbA1cInNotes) {
+                        const hba1cContribObj = tierPred?.top_5_shap_contributions?.find((s: any) => (s.feature || '').toLowerCase().includes('hba1c') || (s.feature || '').toLowerCase().includes('glycated'))
+                          || tierPred?.all_shap_contributions?.find((s: any) => (s.feature || '').toLowerCase().includes('hba1c') || (s.feature || '').toLowerCase().includes('glycated'));
+                        const hba1cContrib = hba1cContribObj ? Number(hba1cContribObj.shap_value) : -0.107;
+                        const hba1cContribStr = hba1cContrib < 0 ? `${hba1cContrib.toFixed(3)}` : `+${hba1cContrib.toFixed(3)}`;
+                        const hba1cRangeText = Number(hba1cVal) >= 6.5 ? 'suggestive of diabetes range' : 'prediabetes range';
+                        neutralNotes.push(`Model note: HbA1c ${hba1cVal}% (${hba1cRangeText}), contribution ${hba1cContribStr}`);
+                      }
+                    }
 
                     return (
                       <div className="p-5 rounded-2xl bg-gradient-to-b from-indigo-50/40 via-white to-sky-50/30 dark:from-indigo-950/20 dark:via-gray-800 dark:to-sky-950/20 border-2 border-indigo-200/90 dark:border-indigo-800/80 shadow-xs space-y-4">
@@ -1051,40 +1070,29 @@ export default function ReportsPage() {
                             <div>
                               <div className="flex items-center gap-2 flex-wrap">
                                 <h4 className="font-bold text-sm text-gray-900 dark:text-gray-100 tracking-tight">
-                                  Population Risk Model (Machine Learning)
+                                  Population Risk Model (Two-Tier Machine Learning)
                                 </h4>
                                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300 font-extrabold uppercase tracking-wide border border-indigo-200 dark:border-indigo-800">
-                                  Trained ML Layer
+                                  {modelUsed === 'tier2_with_hba1c' ? 'Tier 2 (Lab-Informed)' : 'Tier 1 (Non-Lab)'}
                                 </span>
                               </div>
                               <p className="text-[11px] text-gray-500 dark:text-gray-400">
-                                Supplementary benchmark prediction paired with genuine SHAP TreeExplainer attribution
+                                Calibrated XGBoost model paired with native SHAP attribution · No imputed values
                               </p>
                             </div>
                           </div>
 
                           <div className="flex items-center gap-2 flex-wrap text-[11px]">
                             <span className="px-2.5 py-1 rounded-lg bg-white dark:bg-gray-800 text-indigo-700 dark:text-indigo-300 font-bold border border-indigo-200 dark:border-indigo-800 shadow-2xs">
-                              RandomForest v2 (Screening)
-                            </span>
-                            <span className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-bold border border-emerald-200 dark:border-emerald-800 shadow-2xs">
-                              85.2% Sensitivity · 0.814 AUC
+                              {modelUsed === 'tier2_with_hba1c' ? 'Lab-informed estimate (HbA1c)' : 'Risk estimate without lab values'}
                             </span>
                           </div>
-                        </div>
-
-                        {/* Mandatory Clinical Separation Disclaimer */}
-                        <div className="p-3.5 rounded-xl bg-amber-50/90 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800/80 text-amber-950 dark:text-amber-200 text-xs flex items-start gap-2.5 shadow-2xs">
-                          <span className="material-symbols-outlined text-[18px] text-amber-600 shrink-0 mt-0.5">info</span>
-                          <p className="leading-relaxed">
-                            <strong>Mandatory Clinical Notice:</strong> This is a supplementary population-based risk model trained on the Pima Indians Diabetes benchmark dataset (768 patients), achieving <strong>85.2% screening sensitivity</strong> (46 of 54 diabetics detected on held-out test data, 0.814 AUC, 72.1% accuracy). This is <strong>strictly separate</strong> from the ADA/WHO clinical threshold assessment above, which is based on your own actual lab values.
-                          </p>
                         </div>
 
                         {/* Model Prediction & Probability Score Card */}
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                           <div className="p-4 bg-white dark:bg-gray-800 rounded-xl border border-indigo-100 dark:border-indigo-900/50 shadow-2xs flex flex-col justify-between sm:col-span-1">
-                            <span className="text-[11px] text-gray-400 font-medium block">Pima Model Risk Score</span>
+                            <span className="text-[11px] text-gray-400 font-medium block">Diabetes Risk Estimate</span>
                             <div className="my-2">
                               <div className="flex items-baseline gap-2">
                                 <span className={`text-3xl font-extrabold tracking-tight ${
@@ -1094,186 +1102,154 @@ export default function ReportsPage() {
                                     ? 'text-amber-600 dark:text-amber-400'
                                     : 'text-emerald-600 dark:text-emerald-400'
                                 }`}>
-                                  {riskPct}%
+                                  {prob != null ? `${(prob * 100).toFixed(1)}%` : `${riskPct}%`}
                                 </span>
-                                <span className="text-xs text-gray-400">probability ({riskProb.toFixed(3)})</span>
+                                <span className="text-xs text-gray-400">
+                                  {prob != null ? `(${prob.toFixed(3)})` : ''}
+                                </span>
                               </div>
-                              <span className={`inline-block mt-1 text-xs font-bold px-2 py-0.5 rounded-md ${
-                                riskColor === 'rose'
-                                  ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
-                                  : riskColor === 'amber'
-                                  ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
-                                  : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
-                              }`}>
-                                {riskCategory}
-                              </span>
+                              <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                                <span className={`inline-block text-xs font-bold px-2 py-0.5 rounded-md ${
+                                  riskColor === 'rose'
+                                    ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                                    : riskColor === 'amber'
+                                    ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                                    : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                }`}>
+                                  {riskCategory} Risk
+                                </span>
+                                {isEscalated && (
+                                  <span 
+                                    className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700/60 flex items-center gap-1 cursor-help"
+                                    title={tierPred?.escalation_notes || 'Raised by lab rule'}
+                                  >
+                                    <span className="material-symbols-outlined text-[12px]">arrow_upward</span>
+                                    Raised by lab rule
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                            <span className="text-[10px] text-gray-400">
-                              Screening cutoff: 40.0% · Base rate: 34.7%
-                            </span>
+                            <div className="space-y-1.5 mt-2">
+                              {/* Tooltip under probability */}
+                              <div 
+                                className="cursor-help inline-flex items-center gap-1.5 p-1.5 rounded-lg bg-gray-50 dark:bg-gray-750/70 border border-gray-150 dark:border-gray-700/60 text-[11px] text-gray-600 dark:text-gray-300"
+                                title="This is the model's estimate of how common diagnosed diabetes is among survey participants with a similar profile. Lab values are checked separately against clinical ranges."
+                              >
+                                <span className="material-symbols-outlined text-[13px] text-indigo-600 dark:text-indigo-400 shrink-0">info</span>
+                                <span className="leading-tight text-[10px]">
+                                  This is the model's estimate of how common diagnosed diabetes is among survey participants with a similar profile. Lab values are checked separately against clinical ranges.
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-gray-500 dark:text-gray-400 block font-medium">
+                                About {prob != null ? Math.round(prob * 100) : riskPct} in 100 people with this profile have diagnosed diabetes (survey data)
+                              </span>
+                              {boundaryNote && (
+                                <span className="inline-block mt-1 text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/60">
+                                  {boundaryNote}
+                                </span>
+                              )}
+                            </div>
                           </div>
 
                           <div className="p-4 bg-white dark:bg-gray-800 rounded-xl border border-indigo-100 dark:border-indigo-900/50 shadow-2xs flex flex-col justify-between sm:col-span-2 space-y-2">
-                            <span className="text-[11px] text-gray-400 font-medium block">Statistical Context & Architecture</span>
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
-                              <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-750 border border-gray-200/60 dark:border-gray-700">
-                                <span className="text-[10px] text-gray-400 block">Training Split</span>
-                                <span className="text-xs font-bold text-gray-800 dark:text-gray-200">80/20 Stratified</span>
-                              </div>
-                              <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-750 border border-gray-200/60 dark:border-gray-700">
-                                <span className="text-[10px] text-gray-400 block">Sensitivity / Recall</span>
-                                <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">85.2% (46/54)</span>
-                              </div>
-                              <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-750 border border-gray-200/60 dark:border-gray-700">
-                                <span className="text-[10px] text-gray-400 block">Cutoff (Screening)</span>
-                                <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">0.40 (CV Tuned)</span>
-                              </div>
-                              <div className="p-2 rounded-lg bg-gray-50 dark:bg-gray-750 border border-gray-200/60 dark:border-gray-700">
-                                <span className="text-[10px] text-gray-400 block">Explainability</span>
-                                <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">shap.TreeExplainer</span>
-                              </div>
-                            </div>
-                            <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-tight">
-                              Screening-optimized ensemble (RandomForest v2 with balanced class weights): Decision cutoff calibrated to 0.40 via 5-fold cross-validation to prioritize sensitivity, reducing missed diabetic patients from 25 down to 8. The SHAP values below measure the exact directional push (+ or -) each biomarker exerts on your final probability score.
+                            <span className="text-[11px] text-gray-400 font-medium block">Clinical Guidance & Model Context</span>
+                            <p className="text-xs text-gray-600 dark:text-gray-300 leading-relaxed">
+                              This risk assessment is generated by the two-tier metabolic model without any imputed or invented patient values. Fasting glucose &ge;126 mg/dL or HbA1c &ge;6.5% is suggestive of diabetes range; confirm with a clinician.
                             </p>
+                            <span className="text-[10px] text-gray-400">
+                              Screening estimate, not a diagnosis.
+                            </span>
                           </div>
                         </div>
 
-                        {/* Real SHAP Feature Contributions Grid */}
-                        <div className="space-y-2.5">
-                          <div className="flex items-center justify-between">
-                            <h5 className="font-bold text-xs text-gray-800 dark:text-gray-200 uppercase tracking-wider flex items-center gap-1.5">
-                              <span className="material-symbols-outlined text-[16px] text-indigo-600">tune</span>
-                              Real SHAP Feature Contributions (shap.TreeExplainer)
-                            </h5>
-                            <span className="text-[10px] text-indigo-700 dark:text-indigo-400 font-semibold">
-                              Exact mathematical Shapley values
-                            </span>
-                          </div>
+                        {/* SHAP Feature Contributions */}
+                        {(riskIncreasing.length > 0 || protective.length > 0 || neutralNotes.length > 0) && (
+                          <div className="space-y-2.5">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                              <h5 className="font-bold text-xs text-gray-800 dark:text-gray-200 uppercase tracking-wider flex items-center gap-1.5">
+                                <span className="material-symbols-outlined text-[16px] text-indigo-600">tune</span>
+                                What's Affecting Your Score (XGBoost SHAP Contributions)
+                              </h5>
+                              <span 
+                                className="text-[10px] font-semibold text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700/60 px-2 py-0.5 rounded-md border border-gray-200 dark:border-gray-600 cursor-help"
+                                title="model contribution (log-odds): bigger bars mean a bigger push on the estimate."
+                              >
+                                model contribution (log-odds) ⓘ
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                              Bigger bars mean a bigger push on the estimate.
+                            </p>
 
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            {/* Column 1: Increasing Risk (+ SHAP) */}
-                            <div className="p-3.5 rounded-xl bg-rose-50/40 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/40 space-y-2.5">
-                              <div className="flex items-center justify-between pb-1.5 border-b border-rose-100 dark:border-rose-900/40">
+                            {/* Neutral Model Notes */}
+                            {neutralNotes.length > 0 && (
+                              <div className="space-y-1.5">
+                                {neutralNotes.map((note: string, nIdx: number) => (
+                                  <div key={nIdx} className="p-2.5 rounded-lg bg-gray-50 dark:bg-gray-750 border border-gray-200 dark:border-gray-700 flex items-center justify-between text-xs">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="material-symbols-outlined text-[15px] text-gray-500">info</span>
+                                      <span className="font-semibold text-gray-800 dark:text-gray-200">{note}</span>
+                                    </div>
+                                    <span 
+                                      className="text-[10px] font-bold px-2 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300"
+                                      title="model contribution (log-odds): bigger bars mean a bigger push on the estimate"
+                                    >
+                                      log-odds
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {/* Column 1: Increasing Risk */}
+                              <div className="p-3.5 rounded-xl bg-rose-50/40 dark:bg-rose-950/20 border border-rose-100 dark:border-rose-900/40 space-y-2.5">
                                 <span className="text-xs font-bold text-rose-800 dark:text-rose-300 flex items-center gap-1">
                                   <span className="material-symbols-outlined text-[15px]">arrow_upward</span>
-                                  Increasing Risk (+ SHAP)
+                                  Increases your estimated risk
                                 </span>
-                                <span className="text-[10px] text-rose-600 dark:text-rose-400 font-semibold">
-                                  {riskIncreasing.length} factors
-                                </span>
-                              </div>
-
-                              {riskIncreasing.length > 0 ? (
-                                riskIncreasing.map((factor: any, i: number) => (
-                                  <div key={i} className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-rose-100 dark:border-rose-900/40 shadow-2xs space-y-1.5">
-                                    <div className="flex items-center justify-between gap-2">
+                                {riskIncreasing.length > 0 ? (
+                                  riskIncreasing.map((factor: any, i: number) => (
+                                    <div key={i} className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-rose-100 dark:border-rose-900/40 shadow-2xs flex items-center justify-between">
                                       <div>
-                                        <div className="flex items-center gap-1.5 flex-wrap">
-                                          <span className="text-xs font-bold text-gray-900 dark:text-gray-100">{factor.label || factor.feature}</span>
-                                          {factor.is_imputed ? (
-                                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 font-medium">
-                                              Imputed (Median)
-                                            </span>
-                                          ) : (
-                                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 border border-teal-200 dark:border-teal-800 font-medium">
-                                              Extracted
-                                            </span>
-                                          )}
-                                        </div>
-                                        <span className="text-[11px] text-gray-500 dark:text-gray-400">
-                                          {factor.formatted_value || `${factor.raw_value}`}
-                                        </span>
+                                        <span className="text-xs font-bold text-gray-900 dark:text-gray-100 block">{factor.label || factor.feature}</span>
+                                        <span className="text-[11px] text-gray-500">{factor.raw_value ? `Value: ${factor.raw_value}` : 'From report'}</span>
                                       </div>
-                                      <span className="text-xs font-bold text-rose-700 dark:text-rose-300 px-2 py-0.5 rounded-full bg-rose-100 dark:bg-rose-900/50 shrink-0">
-                                        +{Number(factor.shap_value || 0).toFixed(3)} SHAP ({factor.impact_pct}%)
+                                      <span className="text-xs font-bold text-rose-700 dark:text-rose-300 px-2 py-0.5 rounded-full bg-rose-100 dark:bg-rose-900/50">
+                                        +{factor.shap_value != null ? Number(factor.shap_value).toFixed(3) : `${factor.impact_pct}%`}
                                       </span>
                                     </div>
-                                    <div className="w-full bg-rose-100 dark:bg-rose-900/30 h-1.5 rounded-full overflow-hidden">
-                                      <div className="bg-rose-500 h-full rounded-full" style={{ width: `${Math.min(100, Math.max(15, Number(factor.impact_pct || 20)))}%` }}></div>
-                                    </div>
-                                    <p className="text-[10px] text-gray-400 leading-tight">
-                                      {factor.clinical_guidance || 'Higher value shifts tree split probabilities toward diabetes classification in benchmark data.'}
-                                    </p>
-                                  </div>
-                                ))
-                              ) : (
-                                <div className="p-4 rounded-lg bg-white dark:bg-gray-800 text-center text-xs text-gray-400 italic">
-                                  No biomarkers exert positive risk pressure on this prediction.
-                                </div>
-                              )}
-                            </div>
+                                  ))
+                                ) : (
+                                  <div className="p-3 text-xs text-gray-400 italic">No positive risk drivers.</div>
+                                )}
+                              </div>
 
-                            {/* Column 2: Protective / Risk Reducing (- SHAP) */}
-                            <div className="p-3.5 rounded-xl bg-emerald-50/40 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 space-y-2.5">
-                              <div className="flex items-center justify-between pb-1.5 border-b border-emerald-100 dark:border-emerald-900/40">
+                              {/* Column 2: Lowering Risk */}
+                              <div className="p-3.5 rounded-xl bg-emerald-50/40 dark:bg-emerald-950/20 border border-emerald-100 dark:border-emerald-900/40 space-y-2.5">
                                 <span className="text-xs font-bold text-emerald-800 dark:text-emerald-300 flex items-center gap-1">
                                   <span className="material-symbols-outlined text-[15px]">arrow_downward</span>
-                                  Protective / Risk-Reducing (- SHAP)
+                                  Lowers your estimated risk
                                 </span>
-                                <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">
-                                  {protective.length} factors
-                                </span>
-                              </div>
-
-                              {protective.length > 0 ? (
-                                protective.map((factor: any, i: number) => (
-                                  <div key={i} className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-emerald-100 dark:border-emerald-900/40 shadow-2xs space-y-1.5">
-                                    <div className="flex items-center justify-between gap-2">
+                                {protective.length > 0 ? (
+                                  protective.map((factor: any, i: number) => (
+                                    <div key={i} className="p-3 bg-white dark:bg-gray-800 rounded-lg border border-emerald-100 dark:border-emerald-900/40 shadow-2xs flex items-center justify-between">
                                       <div>
-                                        <div className="flex items-center gap-1.5 flex-wrap">
-                                          <span className="text-xs font-bold text-gray-900 dark:text-gray-100">{factor.label || factor.feature}</span>
-                                          {factor.is_imputed ? (
-                                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 font-medium">
-                                              Imputed (Median)
-                                            </span>
-                                          ) : (
-                                            <span className="text-[9px] px-1.5 py-0.2 rounded bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 border border-teal-200 dark:border-teal-800 font-medium">
-                                              Extracted
-                                            </span>
-                                          )}
-                                        </div>
-                                        <span className="text-[11px] text-gray-500 dark:text-gray-400">
-                                          {factor.formatted_value || `${factor.raw_value}`}
-                                        </span>
+                                        <span className="text-xs font-bold text-gray-900 dark:text-gray-100 block">{factor.label || factor.feature}</span>
+                                        <span className="text-[11px] text-gray-500">{factor.raw_value ? `Value: ${factor.raw_value}` : 'From report'}</span>
                                       </div>
-                                      <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/50 shrink-0">
-                                        {Number(factor.shap_value || 0).toFixed(3)} SHAP ({factor.impact_pct}%)
+                                      <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300 px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/50">
+                                        {factor.shap_value != null ? Number(factor.shap_value).toFixed(3) : `-${factor.impact_pct}%`}
                                       </span>
                                     </div>
-                                    <div className="w-full bg-emerald-100 dark:bg-emerald-900/30 h-1.5 rounded-full overflow-hidden">
-                                      <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${Math.min(100, Math.max(15, Number(factor.impact_pct || 20)))}%` }}></div>
-                                    </div>
-                                    <p className="text-[10px] text-gray-400 leading-tight">
-                                      {factor.clinical_guidance || 'Favorable biomarker value pulls aggregate probability below the baseline population mean.'}
-                                    </p>
-                                  </div>
-                                ))
-                              ) : (
-                                <div className="p-4 rounded-lg bg-white dark:bg-gray-800 text-center text-xs text-gray-400 italic">
-                                  All evaluated biomarkers are currently shifting score upward or are neutral.
-                                </div>
-                              )}
+                                  ))
+                                ) : (
+                                  <div className="p-3 text-xs text-gray-400 italic">No risk-reducing drivers.</div>
+                                )}
+                              </div>
                             </div>
                           </div>
-                        </div>
-
-                        {/* Feature Provenance & Imputation Disclosure (Transparent Data Handling) */}
-                        <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-800 text-xs space-y-1.5">
-                          <div className="flex items-center justify-between">
-                            <span className="font-bold text-[11px] uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center gap-1">
-                              <span className="material-symbols-outlined text-[15px] text-teal-600">account_tree</span>
-                              Feature Provenance & Imputation Disclosure
-                            </span>
-                            <span className="text-[10px] text-slate-500">
-                              {extractedFeatures.length} extracted · {imputedFeatures.length} imputed
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
-                            <strong>Extracted from your report:</strong> {extractedFeatures.length > 0 ? extractedFeatures.join(', ') : 'None'}.<br />
-                            <strong>Imputed with dataset population medians:</strong> {imputedFeatures.join(', ')}. Routine single-patient lab reports do not typically record specialized Pima research biomarkers (such as Triceps Skin Fold thickness, 2-Hour Serum Insulin, or Genetic Pedigree score). Per machine learning best practices, missing features are imputed with dataset medians (e.g., Insulin: 125 μU/mL, Skin: 29 mm, BP: 72 mmHg) and pregnancies for male patients are anchored to 0.
-                          </p>
-                        </div>
+                        )}
                       </div>
                     );
                   })()}

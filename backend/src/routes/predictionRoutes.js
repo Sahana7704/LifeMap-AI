@@ -4,7 +4,9 @@ const predictionController = require('../controllers/predictionController');
 const { requireAuth } = require('../middleware/auth');
 
 router.post('/run', requireAuth, predictionController.runPrediction);
+router.post('/diabetes-tier', requireAuth, predictionController.predictDiabetesTier);
 router.get('/latest', requireAuth, predictionController.getLatestPrediction);
 router.get('/history', requireAuth, predictionController.getPredictionHistory);
 
 module.exports = router;
+

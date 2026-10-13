@@ -22,9 +22,12 @@ app = FastAPI(
     version="1.0.0"
 )
 
+frontend_origins_env = os.environ.get("FRONTEND_ORIGIN", "*")
+allowed_origins = [o.strip() for o in frontend_origins_env.split(",")] if frontend_origins_env != "*" else ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -70,6 +73,28 @@ try:
     print("Loaded Heart Disease Model & SHAP Explainer successfully.")
 except Exception as e:
     print(f"Warning: Heart disease model not loaded: {e}")
+
+# Mount two-tier diabetes module API from diabetes_module
+diabetes_api_module = None
+try:
+    from pathlib import Path
+    import sys
+    import importlib.util
+    dm_src = Path(__file__).resolve().parent.parent / "diabetes_module" / "src"
+    if str(dm_src) not in sys.path:
+        sys.path.insert(0, str(dm_src))
+    import train_and_evaluate
+    import __main__
+    __main__.TabularPreprocessor = train_and_evaluate.TabularPreprocessor
+    __main__.ProbabilityCalibrator = train_and_evaluate.ProbabilityCalibrator
+    spec = importlib.util.spec_from_file_location("diabetes_api_module", dm_src / "app.py")
+    diabetes_api_module = importlib.util.module_from_spec(spec)
+    sys.modules["diabetes_api_module"] = diabetes_api_module
+    spec.loader.exec_module(diabetes_api_module)
+    app.mount("/diabetes", diabetes_api_module.app)
+    print("Mounted diabetes_module at /diabetes successfully.")
+except Exception as e:
+    print(f"Warning: Could not mount diabetes_module: {e}")
 
 class HealthMetricsInput(BaseModel):
     age: float = Field(default=42.0, ge=1.0, le=120.0)
@@ -306,6 +331,7 @@ def extract_metabolic_report(file: UploadFile = File(...)):
                 status_code=422,
                 detail=result.get("error") or "This appears to be a research or statistical summary table, not an individual lab report. Please upload your own personal diagnostic report."
             )
+        result["raw_text"] = raw_text
         return result
     except HTTPException:
         raise

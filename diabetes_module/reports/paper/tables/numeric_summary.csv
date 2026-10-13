@@ -1,0 +1,6 @@
+Dataset,Feature,Diabetic Mean (SD),"Diabetic Median [Min, Max]",Non-Diabetic Mean (SD),"Non-Diabetic Median [Min, Max]"
+NHANES,Age (years),62.1 (13.0),"63.0 [18.0, 80.0]",45.9 (18.4),"44.0 [18.0, 80.0]"
+NHANES,BMI (kg/m2),32.4 (7.7),"31.1 [16.0, 84.4]",28.7 (7.0),"27.6 [14.1, 86.2]"
+NHANES,Systolic BP (mmHg),132.6 (20.1),"129.3 [74.0, 238.0]",123.1 (18.2),"120.0 [64.7, 234.0]"
+NHANES,Diastolic BP (mmHg),68.7 (14.2),"70.0 [0.0, 138.7]",70.4 (12.6),"70.7 [0.0, 135.3]"
+BRFSS,BMI (kg/m2),31.9 (7.4),"31.0 [13.0, 98.0]",27.7 (6.3),"27.0 [12.0, 98.0]"

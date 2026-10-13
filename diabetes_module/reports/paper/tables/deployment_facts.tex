@@ -1,0 +1,13 @@
+\begin{tabular}{lll}
+\toprule
+Artifact & Disk Size (MB) & Inference Latency \\
+\midrule
+Logistic Regression (lr_full.joblib) & 0.001 MB & Sub-10ms \\
+Random Forest (rf_full.joblib) & 11.440 MB & Sub-10ms \\
+XGBoost (xgb_full.joblib) & 0.286 MB & Sub-10ms \\
+PyTorch MLP (mlp_full.pt) & 0.020 MB & Sub-10ms \\
+Stacking Meta-Learner (stacking_full.joblib) & 0.001 MB & Sub-10ms \\
+Tier 1 Final Calibrated XGBoost & 0.287 MB & Mean: ~4.4 ms, P95: ~5.5 ms \\
+Tier 2 Final Calibrated XGBoost & 0.195 MB & Mean: ~4.4 ms, P95: ~5.5 ms \\
+\bottomrule
+\end{tabular}

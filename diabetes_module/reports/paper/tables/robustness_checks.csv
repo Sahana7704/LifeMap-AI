@@ -1,0 +1,9 @@
+Setting,Model,ROC-AUC,Recall,Accuracy,Details
+5-Fold CV (Train split),Logistic Regression,0.846 +/- 0.010,0.798 +/- 0.031,0.753 +/- 0.005,"Stratified 5-fold on n=12,227"
+5-Fold CV (Train split),XGBoost,0.848 +/- 0.009,0.733 +/- 0.022,0.789 +/- 0.006,"Stratified 5-fold on n=12,227"
+Temporal Split (2013-16 -> 2017-18),Logistic Regression,0.839,0.823,0.726,Train H+I (n=11790) -> Test J (n=5678)
+Temporal Split (2013-16 -> 2017-18),XGBoost,0.842,0.763,0.768,Train H+I (n=11790) -> Test J (n=5678)
+Imputed Pipeline (Standard),Logistic Regression,0.858,-,-,Imputed test (n=2621)
+Complete-Case Analysis,Logistic Regression,0.850,-,-,Complete cases only (n=2209 of 2621)
+Imputed Pipeline (Standard),XGBoost,0.858,-,-,Imputed test (n=2621)
+Complete-Case Analysis,XGBoost,0.851,-,-,Complete cases only (n=2209 of 2621)

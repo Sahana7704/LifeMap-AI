@@ -6,13 +6,9 @@ function getFastApiUrl() {
   let raw = process.env.FASTAPI_URL ? process.env.FASTAPI_URL.trim() : '';
 
   if (!raw) {
-    if (isProduction) {
-      throw new Error(
-        'FASTAPI_URL environment variable is required in production with no localhost fallback. ' +
-        'Please configure FASTAPI_URL in Render environment settings (e.g. https://lifemap-ai-hbmn.onrender.com).'
-      );
-    }
-    raw = 'http://127.0.0.1:8000';
+    throw new Error(
+      'FASTAPI_URL environment variable is required. Please configure FASTAPI_URL in your environment or .env file.'
+    );
   }
 
   if (!raw.startsWith('http://') && !raw.startsWith('https://')) {
@@ -121,10 +117,42 @@ async function getRecommendations(recommendationData) {
   }, 'getRecommendations');
 }
 
+async function predictDiabetesTier(features, labs, hba1c) {
+  const diabetesUrl = process.env.DIABETES_SERVICE_URL;
+  if (!diabetesUrl) {
+    throw new Error(
+      'DIABETES_SERVICE_URL environment variable is required. Please configure DIABETES_SERVICE_URL in your environment or .env file.'
+    );
+  }
+  const url = `${diabetesUrl.replace(/\/+$/, '')}/predict`;
+  const payload = {
+    features,
+    labs: labs || undefined,
+    hba1c: hba1c !== undefined && hba1c !== null ? hba1c : undefined
+  };
+  try {
+    const response = await axios.post(url, payload, {
+      timeout: 10000,
+      headers: { 'Content-Type': 'application/json' }
+    });
+    return response.data;
+  } catch (err) {
+    // Fallback to ml_service mounted /diabetes/predict
+    const fallbackUrl = `${getFastApiUrl()}/diabetes/predict`;
+    const response = await axios.post(fallbackUrl, payload, {
+      timeout: 15000,
+      headers: { 'Content-Type': 'application/json' }
+    });
+    return response.data;
+  }
+}
+
 module.exports = {
   predictRisk,
   extractReport,
   extractMetabolicReport,
   getRecommendations,
+  predictDiabetesTier,
   getFastApiUrl
 };
+
