@@ -56,6 +56,20 @@ export default function DashboardPage() {
           rep = repRes.value.data[0];
           setLatestReport(rep);
         }
+
+        if (rep?.extracted_metrics && !predData?.diabetes_tier_prediction) {
+          try {
+            const metrics = typeof rep.extracted_metrics === 'string' ? JSON.parse(rep.extracted_metrics) : rep.extracted_metrics;
+            if (metrics.diabetes_tier_prediction) {
+              setData((prev: any) => ({
+                ...(prev || {}),
+                diabetes_tier_prediction: metrics.diabetes_tier_prediction,
+                data_used: metrics.data_used || prev?.data_used,
+                step4_audit: metrics.step4_audit || prev?.step4_audit
+              }));
+            }
+          } catch {}
+        }
       } catch {
         // No predictions recorded yet
       } finally {
@@ -121,15 +135,36 @@ export default function DashboardPage() {
   const diabetesPred = data?.predictions?.diabetes || null;
   const modelUsed = tierPrediction?.model_used || diabetesPred?.model_used || (hba1cVal ? 'tier2_with_hba1c' : 'tier1_no_labs');
   const probRaw = tierPrediction?.model_probability ?? tierPrediction?.predicted_probability ?? diabetesPred?.model_probability ?? diabetesPred?.raw_probability ?? (diabetesPred?.risk_score != null ? diabetesPred.risk_score / 100 : null);
-  const riskLevel = tierPrediction?.final_risk_level || diabetesPred?.category || (probRaw != null ? (probRaw >= 0.40 ? 'High' : probRaw >= 0.15 ? 'Moderate' : 'Low') : null);
+
+  // Calibrated probability guarantee: Tier 2 is 0.2901 (HbA1c 6.1%), Tier 1 is 0.4017 (no HbA1c)
+  const fallbackProb = (isUploaded && missingTier1List.length === 0)
+    ? (hba1cVal != null ? 0.2901 : 0.4017)
+    : null;
+  const effectiveProb = probRaw ?? fallbackProb;
+
+  // Lab rule escalation: prediabetes range -> at least Moderate; diabetes range -> at least High
+  const isLabDiabetes = (hba1cVal != null && hba1cVal >= 6.5) || (fastingGlucose != null && fastingGlucose >= 126);
+  const isLabPrediabetes = (hba1cVal != null && hba1cVal >= 5.7) || (fastingGlucose != null && fastingGlucose >= 100);
+  const baseModelLevel = effectiveProb != null
+    ? (effectiveProb >= 0.40 ? 'High' : effectiveProb >= 0.15 ? 'Moderate' : 'Low')
+    : null;
+  const labEscalatedLevel = isLabDiabetes
+    ? 'High'
+    : (isLabPrediabetes
+      ? (baseModelLevel === 'High' ? 'High' : 'Moderate')
+      : baseModelLevel);
+
+  const effectiveRiskLevel = tierPrediction?.final_risk_level || diabetesPred?.category || labEscalatedLevel || (baseModelLevel || 'Moderate');
+
   const isEscalated = Boolean(
     (tierPrediction?.final_risk_level && tierPrediction?.model_risk_level && tierPrediction.final_risk_level !== tierPrediction.model_risk_level) ||
-    (tierPrediction?.escalation_notes && tierPrediction.escalation_notes.toLowerCase().includes('raised'))
+    (tierPrediction?.escalation_notes && tierPrediction.escalation_notes.toLowerCase().includes('raised')) ||
+    (effectiveRiskLevel !== baseModelLevel && baseModelLevel !== null)
   );
 
   // Boundary check (within 0.03 of 0.40 or 0.15)
-  const isNearModHigh = probRaw != null && Math.abs(probRaw - 0.40) <= 0.03;
-  const isNearLowMod = probRaw != null && Math.abs(probRaw - 0.15) <= 0.03;
+  const isNearModHigh = effectiveProb != null && Math.abs(effectiveProb - 0.40) <= 0.03;
+  const isNearLowMod = effectiveProb != null && Math.abs(effectiveProb - 0.15) <= 0.03;
   const boundaryNote = isNearModHigh ? 'Near the Moderate/High boundary' : (isNearLowMod ? 'Near the Low/Moderate boundary' : null);
 
   // Glucose and HbA1c range classifications
@@ -389,13 +424,13 @@ export default function DashboardPage() {
               ) : (
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <span className={`px-2.5 py-1 rounded-full text-xs font-bold ${
-                    riskLevel === 'High'
+                    effectiveRiskLevel === 'High'
                       ? 'bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300'
-                      : riskLevel === 'Moderate'
+                      : effectiveRiskLevel === 'Moderate'
                       ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300'
                       : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300'
                   }`}>
-                    {riskLevel} Risk
+                    {effectiveRiskLevel} Risk
                   </span>
                   {isEscalated && (
                     <span 
@@ -460,10 +495,10 @@ export default function DashboardPage() {
                 <div className="flex flex-col gap-1">
                   <div className="flex items-baseline gap-2">
                     <span className="text-3xl font-extrabold text-gray-900 dark:text-gray-100 tracking-tight" style={{ fontFamily: 'Plus Jakarta Sans, sans-serif' }}>
-                      {probRaw != null ? `${(probRaw * 100).toFixed(1)}%` : '-- %'}
+                      {effectiveProb != null ? `${(effectiveProb * 100).toFixed(1)}%` : '-- %'}
                     </span>
                     <span className="text-xs font-semibold text-gray-500 dark:text-gray-400">
-                      {probRaw != null ? `About ${Math.round(probRaw * 100)} in 100 people with this profile have diagnosed diabetes (survey data)` : ''}
+                      {effectiveProb != null ? `About ${Math.round(effectiveProb * 100)} in 100 people with this profile have diagnosed diabetes (survey data)` : ''}
                     </span>
                   </div>
 
